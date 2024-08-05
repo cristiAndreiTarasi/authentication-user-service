@@ -23,8 +23,6 @@ dependencies {
     implementation(libs.ktor.server.core)
     implementation(libs.ktor.serialization.kotlinx.json)
     implementation(libs.ktor.server.content.negotiation)
-    implementation(libs.exposed.core)
-    implementation(libs.exposed.jdbc)
     implementation(libs.h2)
     implementation(libs.postgresql)
     implementation(libs.ktor.server.cors)
@@ -35,13 +33,11 @@ dependencies {
     testImplementation(libs.ktor.server.test.host)
     testImplementation(libs.kotlin.test.junit)
 
-    implementation("org.flywaydb:flyway-core:9.0.1")
     implementation("io.github.cdimascio:dotenv-kotlin:6.4.1")
 
     // Apache Commons Email
     implementation("org.apache.commons:commons-email:1.5")
 
     // For datetime
-    implementation("org.jetbrains.exposed:exposed-java-time:0.39.2")
     implementation("org.jetbrains.kotlinx:kotlinx-datetime:0.6.0")
 }

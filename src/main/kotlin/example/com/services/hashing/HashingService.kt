@@ -1,4 +1,4 @@
-package example.com.security.hashing
+package example.com.services.hashing
 
 import java.security.SecureRandom
 import java.util.Base64

@@ -1,4 +1,4 @@
-package example.com.email
+package example.com.services.email
 
 import org.apache.commons.mail.SimpleEmail
 import org.slf4j.LoggerFactory
