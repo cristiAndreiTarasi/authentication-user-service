@@ -6,10 +6,7 @@ import kotlinx.datetime.LocalDateTime
 import kotlinx.datetime.toJavaLocalDateTime
 import kotlinx.datetime.toKotlinLocalDateTime
 import kotlinx.serialization.Serializable
-import java.sql.Connection
-import java.sql.ResultSet
-import java.sql.Statement
-import java.sql.Timestamp
+import java.sql.*
 
 @Serializable
 data class Token(
@@ -20,7 +17,7 @@ data class Token(
     var createdAt: LocalDateTime
 )
 
-class TokenSchema(private val connection: Connection) {
+class TokenSchema(private val dbConnection: Connection) {
     companion object {
         private const val INSERT_TOKEN = "INSERT INTO tokens (user_id, token, created_at, expires_at) VALUES (?, ?, ?, ?)"
         private const val SELECT_TOKEN = "SELECT * FROM tokens WHERE token = ?"
@@ -30,12 +27,18 @@ class TokenSchema(private val connection: Connection) {
     }
 
     init {
-        connection.createStatement()
+        dbConnection.createStatement()
     }
 
-    suspend fun <T> dbQuery(block: suspend () -> T): T = withContext(Dispatchers.IO) { block() }
+    private suspend fun <T> dbQuery(block: suspend (Connection) -> T): T = withContext(Dispatchers.IO) {
+        try {
+            block(dbConnection)
+        } catch (e: SQLException) {
+            throw RuntimeException("Database query failed: ${e.message}", e)
+        }
+    }
 
-    suspend fun create(tokenModel: Token): Int = dbQuery {
+    suspend fun create(tokenModel: Token): Int = dbQuery { connection ->
         val statement = connection.prepareStatement(INSERT_TOKEN, Statement.RETURN_GENERATED_KEYS)
         statement.setInt(1, tokenModel.userId)
         statement.setString(2, tokenModel.token)
@@ -51,7 +54,7 @@ class TokenSchema(private val connection: Connection) {
         }
     }
 
-    suspend fun findByToken(token: String): Token? = dbQuery {
+    suspend fun findByToken(token: String): Token? = dbQuery { connection ->
         val statement = connection.prepareStatement(SELECT_TOKEN)
         statement.setString(1, token)
         val resultSet = statement.executeQuery()
@@ -62,7 +65,7 @@ class TokenSchema(private val connection: Connection) {
         }
     }
 
-    suspend fun findByUserId(userId: Int): Token? = dbQuery {
+    suspend fun findByUserId(userId: Int): Token? = dbQuery { connection ->
         val statement = connection.prepareStatement(SELECT_TOKEN_BY_USER_ID)
         statement.setInt(1, userId)
         val resultSet = statement.executeQuery()
@@ -73,7 +76,7 @@ class TokenSchema(private val connection: Connection) {
         }
     }
 
-    suspend fun update(tokenModel: Token): Boolean = dbQuery {
+    suspend fun update(tokenModel: Token): Boolean = dbQuery { connection ->
         val statement = connection.prepareStatement(UPDATE_TOKEN)
         statement.setString(1, tokenModel.token)
         statement.setTimestamp(2, Timestamp.valueOf(tokenModel.expiresAt.toJavaLocalDateTime()))
@@ -81,7 +84,7 @@ class TokenSchema(private val connection: Connection) {
         statement.executeUpdate() > 0
     }
 
-    suspend fun deleteTokensForUser(userId: Int): Boolean = dbQuery {
+    suspend fun deleteTokensForUser(userId: Int): Boolean = dbQuery { connection ->
         val statement = connection.prepareStatement(DELETE_TOKENS_FOR_USER)
         statement.setInt(1, userId)
         statement.executeUpdate() > 0

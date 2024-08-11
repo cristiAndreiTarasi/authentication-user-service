@@ -18,8 +18,12 @@ import io.ktor.server.auth.*
 import io.ktor.server.request.*
 import io.ktor.server.response.*
 import io.ktor.server.routing.*
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import kotlinx.datetime.*
 import kotlinx.serialization.Serializable
+import java.sql.Connection
+import java.sql.SQLException
 
 @Serializable
 data class SignupRequest(val email: String, val password: String)
@@ -53,6 +57,7 @@ fun Application.configureRouting(
     tokenSchema: TokenSchema,
     hashingService: HashingService,
     tokenService: TokenService,
+    dbConnection: Connection
 ) {
     suspend fun generateUniqueUsername(userSchema: UserSchema): String {
         while (true) {
@@ -393,13 +398,33 @@ fun Application.configureRouting(
                     return@delete
                 }
 
-                val deleteResult = userSchema.deleteUser(userId)
-                tokenSchema.deleteTokensForUser(userId)
+                try {
+                    dbConnection.autoCommit = false
 
-                if (deleteResult) {
+                    val tokenDeleteResult = tokenSchema.deleteTokensForUser(userId)
+                    if (!tokenDeleteResult) {
+                        dbConnection.rollback()
+                        call.respond(HttpStatusCode.InternalServerError, "Failed to delete user tokens")
+                        return@delete
+                    }
+
+                    val deleteResult = userSchema.deleteUser(userId)
+                    if (!deleteResult) {
+                        dbConnection.rollback()
+                        call.respond(HttpStatusCode.InternalServerError, "Failed to delete user")
+                        return@delete
+                    }
+
+                    dbConnection.commit()
                     call.respond(HttpStatusCode.OK, "User deleted successfully")
-                } else {
-                    call.respond(HttpStatusCode.InternalServerError, "Failed to delete user")
+                } catch (e: SQLException) {
+                    dbConnection.rollback()
+                    call.respond(
+                        HttpStatusCode.InternalServerError,
+                        "Failed to delete user and tokens: ${e.message}"
+                    )
+                } finally {
+                    dbConnection.autoCommit = true
                 }
             }
 

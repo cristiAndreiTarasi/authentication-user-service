@@ -6,10 +6,7 @@ import kotlinx.datetime.LocalDateTime
 import kotlinx.datetime.toJavaLocalDateTime
 import kotlinx.datetime.toKotlinLocalDateTime
 import kotlinx.serialization.Serializable
-import java.sql.Connection
-import java.sql.ResultSet
-import java.sql.Statement
-import java.sql.Timestamp
+import java.sql.*
 
 @Serializable
 data class ExposedUser(
@@ -47,10 +44,16 @@ class UserSchema(private val dbConnection: Connection) {
         dbConnection.createStatement()
     }
 
-    private suspend fun <T> dbQuery(block: suspend () -> T): T = withContext(Dispatchers.IO) { block() }
+    private suspend fun <T> dbQuery(block: suspend (Connection) -> T): T = withContext(Dispatchers.IO) {
+        try {
+            block(dbConnection)
+        } catch (e: SQLException) {
+            throw RuntimeException("Database query failed: ${e.message}", e)
+        }
+    }
 
-    suspend fun insertUser(user: ExposedUser): Int = dbQuery {
-        val statement = dbConnection.prepareStatement(INSERT_USER, Statement.RETURN_GENERATED_KEYS)
+    suspend fun insertUser(user: ExposedUser): Int = dbQuery { connection ->
+        val statement = connection.prepareStatement(INSERT_USER, Statement.RETURN_GENERATED_KEYS)
 
         statement.setString(1, user.email)
         statement.setString(2, user.password)
@@ -71,8 +74,8 @@ class UserSchema(private val dbConnection: Connection) {
         }
     }
 
-    suspend fun findByEmail(email: String): ExposedUser? = dbQuery {
-        val statement = dbConnection.prepareStatement(SELECT_USER_BY_EMAIL)
+    suspend fun findByEmail(email: String): ExposedUser? = dbQuery { connection ->
+        val statement = connection.prepareStatement(SELECT_USER_BY_EMAIL)
         statement.setString(1, email)
         val resultSet = statement.executeQuery()
         if (resultSet.next()) {
@@ -82,8 +85,8 @@ class UserSchema(private val dbConnection: Connection) {
         }
     }
 
-    suspend fun findByUsername(username: String): ExposedUser? = dbQuery {
-        val statement = dbConnection.prepareStatement(SELECT_USER_BY_USERNAME)
+    suspend fun findByUsername(username: String): ExposedUser? = dbQuery { connection ->
+        val statement = connection.prepareStatement(SELECT_USER_BY_USERNAME)
         statement.setString(1, username)
         val resultSet = statement.executeQuery()
         if (resultSet.next()) {
@@ -93,8 +96,8 @@ class UserSchema(private val dbConnection: Connection) {
         }
     }
 
-    suspend fun findById(id: Int): ExposedUser? = dbQuery {
-        val statement = dbConnection.prepareStatement(SELECT_USER_BY_ID)
+    suspend fun findById(id: Int): ExposedUser? = dbQuery { connection ->
+        val statement = connection.prepareStatement(SELECT_USER_BY_ID)
         statement.setInt(1, id)
         val resultSet = statement.executeQuery()
         if (resultSet.next()) {
@@ -104,8 +107,8 @@ class UserSchema(private val dbConnection: Connection) {
         }
     }
 
-    suspend fun findByToken(token: String): ExposedUser? = dbQuery {
-        val statement = dbConnection.prepareStatement(SELECT_USER_BY_TOKEN)
+    suspend fun findByToken(token: String): ExposedUser? = dbQuery { connection ->
+        val statement = connection.prepareStatement(SELECT_USER_BY_TOKEN)
         statement.setString(1, token)
         val resultSet = statement.executeQuery()
         if (resultSet.next()) {
@@ -115,64 +118,64 @@ class UserSchema(private val dbConnection: Connection) {
         }
     }
 
-    suspend fun updatePasswordResetToken(userId: Int, token: String, expiresAt: LocalDateTime): Boolean = dbQuery {
-        val statement = dbConnection.prepareStatement(UPDATE_PASSWORD_RESET_TOKEN)
+    suspend fun updatePasswordResetToken(userId: Int, token: String, expiresAt: LocalDateTime): Boolean = dbQuery { connection ->
+        val statement = connection.prepareStatement(UPDATE_PASSWORD_RESET_TOKEN)
         statement.setString(1, token)
         statement.setTimestamp(2, Timestamp.valueOf(expiresAt.toJavaLocalDateTime()))
         statement.setInt(3, userId)
         statement.executeUpdate() > 0
     }
 
-    suspend fun updateUserPassword(userId: Int, newPassword: String): Boolean = dbQuery {
-        val statement = dbConnection.prepareStatement(UPDATE_USER_PASSWORD)
+    suspend fun updateUserPassword(userId: Int, newPassword: String): Boolean = dbQuery { connection ->
+        val statement = connection.prepareStatement(UPDATE_USER_PASSWORD)
         statement.setString(1, newPassword)
         statement.setInt(2, userId)
         statement.executeUpdate() > 0
     }
 
-    suspend fun getAllUsers(): List<ExposedUser> = dbQuery {
-        val statement = dbConnection.prepareStatement(SELECT_ALL_USERS)
+    suspend fun getAllUsers(): List<ExposedUser> = dbQuery { connection ->
+        val statement = connection.prepareStatement(SELECT_ALL_USERS)
         val resultSet = statement.executeQuery()
         resultSet.toUsers()
     }
 
-    suspend fun getUserById(id: Int): ExposedUser? = dbQuery {
-        val statement = dbConnection.prepareStatement(SELECT_USER_BY_ID)
+    suspend fun getUserById(id: Int): ExposedUser? = dbQuery { connection ->
+        val statement = connection.prepareStatement(SELECT_USER_BY_ID)
         statement.setInt(1, id)
         val resultSet = statement.executeQuery()
         resultSet.toUsers().firstOrNull()
     }
 
-    suspend fun updateBio(id: Int, bio: String) = dbQuery {
-        val statement = dbConnection.prepareStatement(UPDATE_USER_BIO)
+    suspend fun updateBio(id: Int, bio: String) = dbQuery { connection ->
+        val statement = connection.prepareStatement(UPDATE_USER_BIO)
         statement.setString(1, bio)
         statement.setInt(2, id)
         statement.executeUpdate()
     }
 
-    suspend fun updateOccupation(id: Int, occupation: String) = dbQuery {
-        val statement = dbConnection.prepareStatement(UPDATE_USER_OCCUPATION)
+    suspend fun updateOccupation(id: Int, occupation: String) = dbQuery { connection ->
+        val statement = connection.prepareStatement(UPDATE_USER_OCCUPATION)
         statement.setString(1, occupation)
         statement.setInt(2, id)
         statement.executeUpdate()
     }
 
-    suspend fun updateUsername(id: Int, username: String) = dbQuery {
-        val statement = dbConnection.prepareStatement(UPDATE_USER_NAME)
+    suspend fun updateUsername(id: Int, username: String) = dbQuery { connection ->
+        val statement = connection.prepareStatement(UPDATE_USER_NAME)
         statement.setString(1, username)
         statement.setInt(2, id)
         statement.executeUpdate()
     }
 
-    suspend fun updateImage(id: Int, imageUrl: String) = dbQuery {
-        val statement = dbConnection.prepareStatement(UPDATE_USER_AVATAR)
+    suspend fun updateImage(id: Int, imageUrl: String) = dbQuery { connection ->
+        val statement = connection.prepareStatement(UPDATE_USER_AVATAR)
         statement.setString(1, imageUrl)
         statement.setInt(2, id)
         statement.executeUpdate()
     }
 
-    suspend fun deleteUser(id: Int): Boolean = dbQuery {
-        val statement = dbConnection.prepareStatement(DELETE_USER_BY_ID)
+    suspend fun deleteUser(id: Int): Boolean = dbQuery { connection ->
+        val statement = connection.prepareStatement(DELETE_USER_BY_ID)
         statement.setInt(1, id)
         statement.executeUpdate() > 0
     }
