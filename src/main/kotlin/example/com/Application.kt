@@ -15,7 +15,7 @@ import java.time.Duration
 fun main(args: Array<String>): Unit = EngineMain.main(args)
 
 fun Application.module() {
-    val dbConnection: Connection = connectToPostgres(embedded = true)
+    val dbConnection: Connection = connectToPostgres(embedded = false)
 
     val tokenConfig = TokenConfig(
         issuer = environment.config.property("jwt.issuer").getString(),

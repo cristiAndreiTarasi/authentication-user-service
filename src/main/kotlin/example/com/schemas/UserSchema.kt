@@ -28,21 +28,6 @@ data class ExposedUser(
 
 class UserSchema(private val dbConnection: Connection) {
     companion object {
-        private const val CREATE_TABLE_USERS = """
-            CREATE TABLE IF NOT EXISTS USERS (
-                ID SERIAL PRIMARY KEY,
-                EMAIL VARCHAR(255) UNIQUE NOT NULL,
-                PASSWORD VARCHAR(255) NOT NULL,
-                SALT VARCHAR(255) NOT NULL,
-                USERNAME VARCHAR(255) UNIQUE NOT NULL,
-                PASSWORD_RESET_TOKEN VARCHAR(512),
-                PASSWORD_RESET_TOKEN_EXPIRY TIMESTAMP,
-                BIO TEXT,
-                OCCUPATION VARCHAR(100),
-                IMAGE_URL TEXT,
-                CREATED_AT TIMESTAMP NOT NULL
-            );
-        """
         private const val INSERT_USER = "INSERT INTO users (email, password, salt, username, created_at) VALUES (?, ?, ?, ?, ?)"
         private const val SELECT_USER_BY_EMAIL = "SELECT * FROM users WHERE email = ?"
         private const val SELECT_USER_BY_USERNAME = "SELECT * FROM users WHERE username = ?"
@@ -59,8 +44,7 @@ class UserSchema(private val dbConnection: Connection) {
     }
 
     init {
-        val statement = dbConnection.createStatement()
-        statement.executeUpdate(CREATE_TABLE_USERS)
+        dbConnection.createStatement()
     }
 
     private suspend fun <T> dbQuery(block: suspend () -> T): T = withContext(Dispatchers.IO) { block() }
@@ -74,10 +58,14 @@ class UserSchema(private val dbConnection: Connection) {
         statement.setString(4, user.username)
         statement.setTimestamp(5, Timestamp.valueOf(user.createdAt.toJavaLocalDateTime()))
 
+        println("Executing SQL: $INSERT_USER with values (${user.email}, ${user.password}, ${user.salt}, ${user.username}, ${user.createdAt})")
+
         statement.executeUpdate()
         val generatedKeys = statement.generatedKeys
         if (generatedKeys.next()) {
-            return@dbQuery generatedKeys.getInt(1)
+            val userId = generatedKeys.getInt(1)
+            println("User inserted with ID: $userId")
+            return@dbQuery userId
         } else {
             throw Exception("Unable to retrieve the id of the newly inserted user")
         }

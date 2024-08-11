@@ -10,11 +10,14 @@ WORKDIR /home/gradle/src
 # Run the Gradle build command to create a fat JAR file
 RUN gradle buildFatJar --no-daemon
 
-# Use the official OpenJDK 19 image as the base image for the runtime stage
-FROM openjdk:19
+# Use the official OpenJDK 19 slim image as the base image for the runtime stage
+FROM openjdk:19-jdk-slim
 
 # Expose port 8081 on the container
 EXPOSE 8081:8081
+
+# Install psql client
+RUN apt-get update && apt-get install -y postgresql-client && rm -rf /var/lib/apt/lists/*
 
 # Create a directory for the application inside the container
 RUN mkdir /app

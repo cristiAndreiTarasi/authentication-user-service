@@ -22,16 +22,6 @@ data class Token(
 
 class TokenSchema(private val connection: Connection) {
     companion object {
-        private const val CREATE_TABLE_TOKENS = """
-            CREATE TABLE IF NOT EXISTS TOKENS (
-                ID SERIAL PRIMARY KEY,
-                USER_ID INT NOT NULL,
-                TOKEN VARCHAR(512) NOT NULL,
-                CREATED_AT TIMESTAMP NOT NULL,
-                EXPIRES_AT TIMESTAMP NOT NULL,
-                FOREIGN KEY (user_id) REFERENCES Users(id)
-            );
-        """
         private const val INSERT_TOKEN = "INSERT INTO tokens (user_id, token, created_at, expires_at) VALUES (?, ?, ?, ?)"
         private const val SELECT_TOKEN = "SELECT * FROM tokens WHERE token = ?"
         private const val SELECT_TOKEN_BY_USER_ID = "SELECT * FROM tokens WHERE user_id = ?"
@@ -40,8 +30,7 @@ class TokenSchema(private val connection: Connection) {
     }
 
     init {
-        val statement = connection.createStatement()
-        statement.executeUpdate(CREATE_TABLE_TOKENS)
+        connection.createStatement()
     }
 
     suspend fun <T> dbQuery(block: suspend () -> T): T = withContext(Dispatchers.IO) { block() }

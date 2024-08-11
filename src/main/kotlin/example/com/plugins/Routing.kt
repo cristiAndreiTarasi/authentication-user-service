@@ -34,7 +34,7 @@ data class RefreshTokenRequest(val refreshToken: String)
 data class ForgotPasswordRequest(val email: String)
 
 @Serializable
-data class AuthResponse(val accessToken: String, val refreshToken: String, val message: String)
+data class RefreshTokenResponse(val accessToken: String, val refreshToken: String, val message: String)
 
 @Serializable
 data class ForgotResponse(val message: String)
@@ -376,7 +376,7 @@ fun Application.configureRouting(
 
                 call.respond(
                     HttpStatusCode.Created,
-                    AuthResponse(newAccessToken, newRefreshToken, "Token refreshed")
+                    RefreshTokenResponse(newAccessToken, newRefreshToken, "Token refreshed")
                 )
             }
 
