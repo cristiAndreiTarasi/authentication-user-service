@@ -1,5 +1,7 @@
 package example.com.plugins
 
+import com.mongodb.client.gridfs.GridFSBucket
+import com.mongodb.client.gridfs.model.GridFSUploadOptions
 import com.typesafe.config.Config
 import com.typesafe.config.ConfigFactory
 import example.com.schemas.ExposedUser
@@ -13,6 +15,7 @@ import example.com.services.hashing.SaltedHash
 import example.com.services.token.TokenClaim
 import example.com.services.token.TokenService
 import io.ktor.http.*
+import io.ktor.http.content.*
 import io.ktor.server.application.*
 import io.ktor.server.auth.*
 import io.ktor.server.request.*
@@ -22,11 +25,17 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.datetime.*
 import kotlinx.serialization.Serializable
+import org.bson.types.ObjectId
+import java.io.ByteArrayInputStream
+import java.io.InputStream
 import java.sql.Connection
 import java.sql.SQLException
 
 @Serializable
-data class SignupRequest(val email: String, val password: String)
+data class SignupRequestDto(val email: String, val password: String)
+
+@Serializable
+data class SigninRequestDto(val email: String, val password: String)
 
 @Serializable
 data class ResetPasswordRequest(val token: String, val newPassword: String)
@@ -50,14 +59,29 @@ data class ResetResponse(val message: String)
 data class SignoutRequest(val userId: Int)
 
 @Serializable
-data class ResponseMessage<T>(val result: T? = null, val error: String? = null)
+data class AuthResponseDto(val accessToken: String, val refreshToken: String)
+
+@Serializable
+data class AuthResponse(
+    val newAccessToken: String? = null,
+    val newRefreshToken: String? = null,
+    val message: String? = null
+)
+
+@Serializable
+data class UploadImageResponse(val message: String, val id: String)
+
+@Serializable
+data class FetchImageResponse(
+    val imageData: ByteArray
+)
 
 fun Application.configureRouting(
     userSchema: UserSchema,
     tokenSchema: TokenSchema,
     hashingService: HashingService,
     tokenService: TokenService,
-    dbConnection: Connection
+    postgresConnection: Connection,
 ) {
     suspend fun generateUniqueUsername(userSchema: UserSchema): String {
         while (true) {
@@ -84,11 +108,11 @@ fun Application.configureRouting(
     routing {
         post("/signup") {
             val user = try {
-                call.receive<SignupRequest>()
+                call.receive<SignupRequestDto>()
             } catch (e: Exception) {
                 call.respond(
                     HttpStatusCode.BadRequest,
-                    ResponseMessage<Unit>(error = "Invalid request format")
+                    AuthResponse(message = "Invalid request format")
                 )
                 return@post
             }
@@ -97,9 +121,7 @@ fun Application.configureRouting(
             if (user.email.isBlank() || user.password.isBlank()) {
                 call.respond(
                     HttpStatusCode.BadRequest,
-                    ResponseMessage<Unit>(
-                        error = "Email and password must not be blank"
-                    )
+                    AuthResponse(message = "Email and password must not be blank")
                 )
                 return@post
             }
@@ -110,9 +132,7 @@ fun Application.configureRouting(
             if (existingUser != null) {
                 call.respond(
                     HttpStatusCode.Conflict,
-                    ResponseMessage<Unit>(
-                        error = "Email already exists"
-                    )
+                    AuthResponse(message = "Email already exists")
                 )
                 return@post
             }
@@ -137,22 +157,20 @@ fun Application.configureRouting(
                 userSchema.insertUser(newUser)
                 call.respond(
                     HttpStatusCode.Created,
-                    ResponseMessage(
-                        "User created successfully"
+                    AuthResponse(
+                        message = "User created successfully"
                     )
                 )
             } catch (e: Exception) {
                 call.respond(
                     HttpStatusCode.InternalServerError,
-                    ResponseMessage<Unit>(
-                        error = "Failed to create user: ${e.message}"
-                    )
+                    AuthResponse(message = "Failed to create user: ${e.message}")
                 )
             }
         }
 
         post("/signin") {
-            val request = call.receive<SignupRequest>()
+            val request = call.receive<SigninRequestDto>()
 
             // Try to find user by email
             val user = userSchema.findByEmail(request.email)
@@ -160,9 +178,7 @@ fun Application.configureRouting(
             if (user == null) {
                 call.respond(
                     HttpStatusCode.NotFound,
-                    ResponseMessage<Unit>(
-                    error = "There is no user related to this email address. Please try again or signup."
-                    )
+                    AuthResponse(message = "There is no user related to this email address. Please try again or signup.")
                 )
                 return@post
             }
@@ -179,9 +195,7 @@ fun Application.configureRouting(
             if (!isValidPassword) {
                 call.respond(
                     HttpStatusCode.Unauthorized,
-                    ResponseMessage<Unit>(
-                        error = "Incorrect email or password."
-                    )
+                    AuthResponse(message = "Incorrect email or password.")
                 )
                 return@post
             }
@@ -189,9 +203,7 @@ fun Application.configureRouting(
             val userId = user.id ?: run {
                 call.respond(
                     HttpStatusCode.InternalServerError,
-                    ResponseMessage<Unit>(
-                        error ="User ID is null."
-                    )
+                    AuthResponse(message = "User ID is null.")
                 )
                 return@post
             }
@@ -217,11 +229,10 @@ fun Application.configureRouting(
             // Respond with tokens
             call.respond(
                 HttpStatusCode.OK,
-                ResponseMessage(
-                    mapOf(
-                        "accessToken" to accessToken,
-                        "refreshToken" to refreshToken
-                    )
+                AuthResponse(
+                    accessToken,
+                    refreshToken,
+                    message = "Successful authentication."
                 )
             )
         }
@@ -244,21 +255,21 @@ fun Application.configureRouting(
             get("/users") {
                 val users = userSchema.getAllUsers()
                 if (users.isNotEmpty()) {
-                    call.respond(HttpStatusCode.OK, ResponseMessage(result = users))
-                } else call.respond(HttpStatusCode.NotFound, ResponseMessage<List<ExposedUser>>(error = "No users found"))
+                    call.respond(HttpStatusCode.OK, users)
+                } else call.respond(HttpStatusCode.NotFound, "No users found")
             }
 
             get("/users/{id}") {
                 val id = call.parameters["id"]?.toIntOrNull()
 
                 if (id == null) {
-                    call.respond(HttpStatusCode.BadRequest, ResponseMessage<ExposedUser>(error = "Invalid user ID"))
+                    call.respond(HttpStatusCode.BadRequest, "Invalid user ID")
                     return@get
                 }
 
                 val user = userSchema.getUserById(id)
-                if (user != null) call.respond(HttpStatusCode.OK, ResponseMessage(result = user))
-                else call.respond(HttpStatusCode.NotFound, ResponseMessage<ExposedUser>(error = "User not found"))
+                if (user != null) call.respond(HttpStatusCode.OK, user)
+                else call.respond(HttpStatusCode.NotFound, "User not found")
             }
 
             post("/forgot-password") {
@@ -398,33 +409,38 @@ fun Application.configureRouting(
                     return@delete
                 }
 
+                val imageIdString = userSchema.getImageIdByUserId(userId)
+                val imageId = imageIdString?.let { ObjectId(it) }
+
                 try {
-                    dbConnection.autoCommit = false
+                    postgresConnection.autoCommit = false
 
                     val tokenDeleteResult = tokenSchema.deleteTokensForUser(userId)
                     if (!tokenDeleteResult) {
-                        dbConnection.rollback()
+                        postgresConnection.rollback()
                         call.respond(HttpStatusCode.InternalServerError, "Failed to delete user tokens")
                         return@delete
                     }
 
                     val deleteResult = userSchema.deleteUser(userId)
                     if (!deleteResult) {
-                        dbConnection.rollback()
+                        postgresConnection.rollback()
                         call.respond(HttpStatusCode.InternalServerError, "Failed to delete user")
                         return@delete
                     }
 
-                    dbConnection.commit()
+                    imageId?.let { userSchema.deleteImage(it) }
+
+                    postgresConnection.commit()
                     call.respond(HttpStatusCode.OK, "User deleted successfully")
                 } catch (e: SQLException) {
-                    dbConnection.rollback()
+                    postgresConnection.rollback()
                     call.respond(
                         HttpStatusCode.InternalServerError,
                         "Failed to delete user and tokens: ${e.message}"
                     )
                 } finally {
-                    dbConnection.autoCommit = true
+                    postgresConnection.autoCommit = true
                 }
             }
 
@@ -432,66 +448,140 @@ fun Application.configureRouting(
                 val id = call.parameters["id"]?.toIntOrNull()
 
                 if (id == null) {
-                    call.respond(HttpStatusCode.BadRequest, ResponseMessage<String>(error = "Invalid user ID"))
+                    call.respond(HttpStatusCode.BadRequest, "Invalid user ID")
                     return@put
                 }
 
                 val bio = call.receive<String>()
                 userSchema.updateBio(id, bio)
-                call.respond(HttpStatusCode.OK, ResponseMessage(result = "User bio updated"))
+                call.respond(HttpStatusCode.OK, "User bio updated")
             }
 
             put("/user/update/{id}/occupation") {
                 val id = call.parameters["id"]?.toIntOrNull()
 
                 if (id == null) {
-                    call.respond(HttpStatusCode.BadRequest, ResponseMessage<String>(error = "Invalid user ID"))
+                    call.respond(HttpStatusCode.BadRequest, "Invalid user ID")
                     return@put
                 }
 
                 val occupation = call.receive<String>()
                 userSchema.updateOccupation(id, occupation)
-                call.respond(HttpStatusCode.OK, ResponseMessage(result = "User occupation updated"))
+                call.respond(HttpStatusCode.OK, "User occupation updated")
             }
 
             put("/user/update/{id}/username") {
                 val id = call.parameters["id"]?.toIntOrNull()
 
                 if (id == null) {
-                    call.respond(HttpStatusCode.BadRequest, ResponseMessage<String>(error = "Invalid user ID"))
+                    call.respond(HttpStatusCode.BadRequest, "Invalid user ID")
                     return@put
                 }
 
                 val username = call.receive<String>()
                 userSchema.updateUsername(id, username)
-                call.respond(HttpStatusCode.OK, ResponseMessage(result = "User username updated"))
+                call.respond(HttpStatusCode.OK, "User username updated")
             }
 
-            put("/user/update/{id}/image") {
-                val id = call.parameters["id"]?.toIntOrNull()
+            post("/upload/image/{userId}") {
+                val userId = call.parameters["userId"]?.toIntOrNull()
+                    ?: return@post call.respond(
+                        HttpStatusCode.BadRequest,
+                        UploadImageResponse("User ID is missing.", "")
+                    )
 
-                if (id == null) {
-                    call.respond(HttpStatusCode.BadRequest, ResponseMessage<String>(error = "Invalid user ID"))
-                    return@put
+                val multipartData = try {
+                    call.receiveMultipart()
+                } catch (e: Exception) {
+                    call.application.environment.log.error("Error receiving multipart data", e)
+                    return@post call.respond(
+                        HttpStatusCode.InternalServerError,
+                        UploadImageResponse("Error receiving multipart data", "")
+                    )
+                }
+                var fileContent: ByteArray? = null
+
+                try {
+                    multipartData.forEachPart { part ->
+                        when (part) {
+                            is PartData.FileItem -> {
+                                fileContent = part.streamProvider().readBytes()
+                            }
+                            else -> {
+                                part.dispose()
+                            }
+                        }
+                    }
+                } catch (e: Exception) {
+                    call.application.environment.log.error("Error processing multipart data", e)
+                    return@post call.respond(
+                        HttpStatusCode.InternalServerError,
+                        UploadImageResponse("Error processing multipart data", "")
+                    )
                 }
 
-                val imageUrl = call.receive<String>()
-                userSchema.updateImage(id, imageUrl)
-                call.respond(HttpStatusCode.OK, ResponseMessage(result = "User image URL updated"))
+                fileContent?.let {
+                    try {
+                        val imageId = userSchema.uploadImage(userId, it)
+                        val updateSuccess = userSchema.updateUserImageId(userId, imageId.toHexString())
+                        if (updateSuccess) {
+                            call.respond(
+                                HttpStatusCode.Created,
+                                UploadImageResponse("File uploaded successfully", imageId.toHexString()),
+                            )
+                        } else {
+                            call.respond(
+                                HttpStatusCode.InternalServerError,
+                                UploadImageResponse("Failed to update user profile with image ID", "")
+                            )
+                        }
+                    } catch (e: Exception) {
+                        call.application.environment.log.error("Error uploading image or updating user profile", e)
+                        call.respond(
+                            HttpStatusCode.InternalServerError,
+                            UploadImageResponse("Error uploading image or updating user profile", "")
+                        )
+                    }
+                } ?: call.respond(
+                    HttpStatusCode.BadRequest,
+                    UploadImageResponse("File content is missing", "")
+                )
+            }
+
+            get("/fetch/image/{userId}") {
+                val userId = call.parameters["userId"]?.toIntOrNull()
+                    ?: return@get call.respond(HttpStatusCode.BadRequest, "User ID is missing")
+
+                // Fetch the image ID associated with the user ID from the database
+                val imageIdString = userSchema.getImageIdByUserId(userId)
+                    ?: return@get call.respond(HttpStatusCode.NotFound, "Image not found for user")
+
+                val imageId = try {
+                    ObjectId(imageIdString)
+                } catch (e: IllegalArgumentException) {
+                    return@get call.respond(HttpStatusCode.BadRequest, "Invalid Image ID")
+                }
+
+                val imageBytes = userSchema.fetchImage(imageId)
+                if (imageBytes.isNotEmpty()) {
+                    call.respondBytes(imageBytes, ContentType.Image.JPEG)
+                } else {
+                    call.respond(HttpStatusCode.NotFound, "Image not found")
+                }
             }
 
             post("/signout") {
                 val request = try {
                     call.receive<SignoutRequest>()
                 } catch (e: Exception) {
-                    call.respond(HttpStatusCode.BadRequest, ResponseMessage<Unit>(error = "Invalid request body"))
+                    call.respond(HttpStatusCode.BadRequest, "Invalid request body")
                     return@post
                 }
 
                 // Check if user ID is valid
                 val user = userSchema.findById(request.userId)
                 if (user == null) {
-                    call.respond(HttpStatusCode.NotFound, ResponseMessage<Unit>(error = "User not found"))
+                    call.respond(HttpStatusCode.NotFound, "User not found")
                     return@post
                 }
 
@@ -499,12 +589,12 @@ fun Application.configureRouting(
                 try {
                     val deleteResult = tokenSchema.deleteTokensForUser(request.userId)
                     if (deleteResult) {
-                        call.respond(HttpStatusCode.OK, ResponseMessage(result = "User signed out successfully"))
+                        call.respond(HttpStatusCode.OK, "User signed out successfully")
                     } else {
-                        call.respond(HttpStatusCode.InternalServerError, ResponseMessage<Unit>(error = "Failed to sign out user"))
+                        call.respond(HttpStatusCode.InternalServerError, "Failed to sign out user")
                     }
                 } catch (e: Exception) {
-                    call.respond(HttpStatusCode.InternalServerError, ResponseMessage<Unit>(error = "Failed to sign out user: ${e.message}"))
+                    call.respond(HttpStatusCode.InternalServerError, "Failed to sign out user: ${e.message}")
                 }
             }
 

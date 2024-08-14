@@ -40,4 +40,12 @@ dependencies {
 
     // For datetime
     implementation("org.jetbrains.kotlinx:kotlinx-datetime:0.6.0")
+
+    // Mongo Driver
+    implementation("org.mongodb:mongodb-driver-core:4.9.0")
+    implementation("org.mongodb:mongodb-driver-sync:4.9.0")
+    implementation("org.mongodb:bson:4.9.0")
+
+    implementation("org.litote.kmongo:kmongo:4.8.0")
+    implementation("org.litote.kmongo:kmongo-coroutine:4.8.0")
 }

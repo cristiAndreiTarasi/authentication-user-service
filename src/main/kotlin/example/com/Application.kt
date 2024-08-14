@@ -1,21 +1,26 @@
 package example.com
 
+import com.mongodb.client.gridfs.GridFSBuckets
 import example.com.config.Constants
+import example.com.plugins.*
 import example.com.schemas.TokenSchema
 import example.com.schemas.UserSchema
 import example.com.services.hashing.HashingService
-import example.com.plugins.*
 import example.com.services.token.TokenConfig
 import example.com.services.token.TokenService
 import io.ktor.server.application.*
 import io.ktor.server.netty.*
+import org.litote.kmongo.KMongo
 import java.sql.Connection
 import java.time.Duration
 
 fun main(args: Array<String>): Unit = EngineMain.main(args)
 
 fun Application.module() {
-    val dbConnection: Connection = connectToPostgres(embedded = false)
+    val postgresConnection: Connection = connectToPostgres(embedded = false)
+//    val mongoDatabase: MongoDatabase = connectToMongoDB()
+    val mongoClient = KMongo.createClient(Constants.CONNECTION_STRING)
+    val mongoDatabase = mongoClient.getDatabase(Constants.MONGODB_CLUSTER)
 
     val tokenConfig = TokenConfig(
         issuer = environment.config.property("jwt.issuer").getString(),
@@ -27,11 +32,11 @@ fun Application.module() {
 
     val hashingService = HashingService()
     val tokenService = TokenService(tokenConfig)
-    val userSchema = UserSchema(dbConnection)
-    val tokenSchema = TokenSchema(dbConnection)
+    val userSchema = UserSchema(postgresConnection, mongoDatabase)
+    val tokenSchema = TokenSchema(postgresConnection)
 
     configureSerialization()
     configureHTTP()
     configureSecurity()
-    configureRouting(userSchema, tokenSchema, hashingService, tokenService, dbConnection)
+    configureRouting(userSchema, tokenSchema, hashingService, tokenService, postgresConnection)
 }
