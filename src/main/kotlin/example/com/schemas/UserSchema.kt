@@ -25,13 +25,14 @@ data class ExposedUser(
     val email: String,
     var password: String,
     val salt: String,
-    val username: String? = null,
+    val username: String,
     val passwordResetToken: String? = null,
     val passwordResetTokenExpiry: LocalDateTime? = null,
     val bio: String? = null,
     val occupation: String? = null,
+    val imageUrl: String? = null,
     @Serializable(with = ObjectIdSerializer::class) var imageId: ObjectId? = null,
-    val createdAt: LocalDateTime
+    val createdAt: LocalDateTime,
 )
 
 @Serializable
@@ -144,13 +145,6 @@ class UserSchema(private val dbConnection: Connection, private val mongoDatabase
         statement.executeUpdate() > 0
     }
 
-    suspend fun updateUserPassword(userId: Int, newPassword: String): Boolean = dbQuery { connection ->
-        val statement = connection.prepareStatement(UPDATE_USER_PASSWORD)
-        statement.setString(1, newPassword)
-        statement.setInt(2, userId)
-        statement.executeUpdate() > 0
-    }
-
     suspend fun getAllUsers(): List<ExposedUser> = dbQuery { connection ->
         val statement = connection.prepareStatement(SELECT_ALL_USERS)
         val resultSet = statement.executeQuery()
@@ -162,6 +156,13 @@ class UserSchema(private val dbConnection: Connection, private val mongoDatabase
         statement.setInt(1, id)
         val resultSet = statement.executeQuery()
         resultSet.toUsers().firstOrNull()
+    }
+
+    suspend fun updateUserPassword(userId: Int, newPassword: String): Boolean = dbQuery { connection ->
+        val statement = connection.prepareStatement(UPDATE_USER_PASSWORD)
+        statement.setString(1, newPassword)
+        statement.setInt(2, userId)
+        statement.executeUpdate() > 0
     }
 
     suspend fun updateBio(id: Int, bio: String) = dbQuery { connection ->

@@ -1,7 +1,5 @@
 package example.com.plugins
 
-import com.mongodb.client.gridfs.GridFSBucket
-import com.mongodb.client.gridfs.model.GridFSUploadOptions
 import com.typesafe.config.Config
 import com.typesafe.config.ConfigFactory
 import example.com.schemas.ExposedUser
@@ -21,13 +19,9 @@ import io.ktor.server.auth.*
 import io.ktor.server.request.*
 import io.ktor.server.response.*
 import io.ktor.server.routing.*
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
 import kotlinx.datetime.*
 import kotlinx.serialization.Serializable
 import org.bson.types.ObjectId
-import java.io.ByteArrayInputStream
-import java.io.InputStream
 import java.sql.Connection
 import java.sql.SQLException
 
@@ -65,16 +59,31 @@ data class AuthResponseDto(val accessToken: String, val refreshToken: String)
 data class AuthResponse(
     val newAccessToken: String? = null,
     val newRefreshToken: String? = null,
-    val message: String? = null
+    val message: String? = null,
+    val user: ExposedUser? = null
 )
 
 @Serializable
-data class UploadImageResponse(val message: String, val id: String)
+data class UploadImageResponse(val message: String, val imageId: String)
 
 @Serializable
 data class FetchImageResponse(
     val imageData: ByteArray
 )
+
+@Serializable
+data class ProfileFieldUpdateResponse(
+    val profileField: String
+)
+
+@Serializable
+data class UpdateUsernameDto(val username: String)
+
+@Serializable
+data class UpdateBioDto(val bio: String)
+
+@Serializable
+data class UpdateOccupationDto(val occupation: String)
 
 fun Application.configureRouting(
     userSchema: UserSchema,
@@ -83,15 +92,6 @@ fun Application.configureRouting(
     tokenService: TokenService,
     postgresConnection: Connection,
 ) {
-    suspend fun generateUniqueUsername(userSchema: UserSchema): String {
-        while (true) {
-            val timestamp = Clock.System.now().toEpochMilliseconds()
-            val randomPart = (100000000000..999999999999).random()
-            val username = "user_${timestamp}_$randomPart"
-            userSchema.findByUsername(username) ?: return username
-        }
-    }
-
     fun isTokenValid(expiresAt: LocalDateTime): Boolean {
         val now = Clock.System.now().toLocalDateTime(TimeZone.currentSystemDefault())
         return now < expiresAt
@@ -103,6 +103,15 @@ fun Application.configureRouting(
         return (1..length)
             .map { allowedChars.random() }
             .joinToString("")
+    }
+
+    suspend fun generateUniqueUsername(userSchema: UserSchema): String {
+        while (true) {
+            val timestamp = Clock.System.now().toEpochMilliseconds()
+            val randomPart = (100000000000..999999999999).random()
+            val username = "user_${timestamp}_$randomPart"
+            userSchema.findByUsername(username) ?: return username
+        }
     }
 
     routing {
@@ -128,7 +137,6 @@ fun Application.configureRouting(
 
             // Check if email already exists
             val existingUser = userSchema.findByEmail(user.email)
-
             if (existingUser != null) {
                 call.respond(
                     HttpStatusCode.Conflict,
@@ -148,8 +156,9 @@ fun Application.configureRouting(
                 email = user.email,
                 password = saltedHash.hash,
                 salt = saltedHash.salt,
+                createdAt = Clock.System.now().toLocalDateTime(TimeZone.of(java.util.TimeZone.getDefault().id)),
                 username = username,
-                createdAt = Clock.System.now().toLocalDateTime(TimeZone.currentSystemDefault())
+                imageUrl = null,
             )
 
             // Save the user to the database
@@ -157,9 +166,7 @@ fun Application.configureRouting(
                 userSchema.insertUser(newUser)
                 call.respond(
                     HttpStatusCode.Created,
-                    AuthResponse(
-                        message = "User created successfully"
-                    )
+                    newUser
                 )
             } catch (e: Exception) {
                 call.respond(
@@ -232,7 +239,8 @@ fun Application.configureRouting(
                 AuthResponse(
                     accessToken,
                     refreshToken,
-                    message = "Successful authentication."
+                    message = "Successful authentication.",
+                    user
                 )
             )
         }
@@ -444,46 +452,46 @@ fun Application.configureRouting(
                 }
             }
 
-            put("/user/update/{id}/bio") {
-                val id = call.parameters["id"]?.toIntOrNull()
+            put("/update/{userId}/bio") {
+                val id = call.parameters["userId"]?.toIntOrNull()
 
                 if (id == null) {
-                    call.respond(HttpStatusCode.BadRequest, "Invalid user ID")
+                    call.respond(HttpStatusCode.BadRequest, ProfileFieldUpdateResponse("Invalid user ID"))
                     return@put
                 }
 
-                val bio = call.receive<String>()
-                userSchema.updateBio(id, bio)
-                call.respond(HttpStatusCode.OK, "User bio updated")
+                val bio = call.receive<UpdateBioDto>()
+                userSchema.updateBio(id, bio.bio)
+                call.respond(HttpStatusCode.OK, ProfileFieldUpdateResponse("User bio updated"))
             }
 
-            put("/user/update/{id}/occupation") {
-                val id = call.parameters["id"]?.toIntOrNull()
+            put("/update/{userId}/occupation") {
+                val id = call.parameters["userId"]?.toIntOrNull()
 
                 if (id == null) {
-                    call.respond(HttpStatusCode.BadRequest, "Invalid user ID")
+                    call.respond(HttpStatusCode.BadRequest, ProfileFieldUpdateResponse("Invalid user ID"))
                     return@put
                 }
 
-                val occupation = call.receive<String>()
-                userSchema.updateOccupation(id, occupation)
-                call.respond(HttpStatusCode.OK, "User occupation updated")
+                val occupation = call.receive<UpdateOccupationDto>()
+                userSchema.updateOccupation(id, occupation.occupation)
+                call.respond(HttpStatusCode.OK, ProfileFieldUpdateResponse("User occupation updated"))
             }
 
-            put("/user/update/{id}/username") {
-                val id = call.parameters["id"]?.toIntOrNull()
+            put("/update/{userId}/username") {
+                val userId = call.parameters["userId"]?.toIntOrNull()
 
-                if (id == null) {
-                    call.respond(HttpStatusCode.BadRequest, "Invalid user ID")
+                if (userId == null) {
+                    call.respond(HttpStatusCode.BadRequest, ProfileFieldUpdateResponse("Invalid user ID"))
                     return@put
                 }
 
-                val username = call.receive<String>()
-                userSchema.updateUsername(id, username)
-                call.respond(HttpStatusCode.OK, "User username updated")
+                val username = call.receive<UpdateUsernameDto>()
+                userSchema.updateUsername(userId, username.username)
+                call.respond(HttpStatusCode.OK, ProfileFieldUpdateResponse("User username updated"))
             }
 
-            post("/upload/image/{userId}") {
+            post("/update/{userId}/image") {
                 val userId = call.parameters["userId"]?.toIntOrNull()
                     ?: return@post call.respond(
                         HttpStatusCode.BadRequest,
@@ -548,7 +556,7 @@ fun Application.configureRouting(
                 )
             }
 
-            get("/fetch/image/{userId}") {
+            get("/fetch/{userId}/image") {
                 val userId = call.parameters["userId"]?.toIntOrNull()
                     ?: return@get call.respond(HttpStatusCode.BadRequest, "User ID is missing")
 
@@ -597,7 +605,6 @@ fun Application.configureRouting(
                     call.respond(HttpStatusCode.InternalServerError, "Failed to sign out user: ${e.message}")
                 }
             }
-
         }
     }
 }
