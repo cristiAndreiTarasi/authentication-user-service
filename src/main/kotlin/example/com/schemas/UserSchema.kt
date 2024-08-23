@@ -3,8 +3,6 @@ package example.com.schemas
 import com.mongodb.client.MongoDatabase
 import com.mongodb.client.gridfs.GridFSBuckets
 import com.mongodb.client.gridfs.model.GridFSUploadOptions
-import com.mongodb.client.model.Filters.eq
-import com.mongodb.client.model.Updates.set
 import example.com.config.ObjectIdSerializer
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -33,13 +31,15 @@ data class ExposedUser(
     val imageUrl: String? = null,
     @Serializable(with = ObjectIdSerializer::class) var imageId: ObjectId? = null,
     val createdAt: LocalDateTime,
+    val likes: Int = 0,
+    val followers: Int = 0,
+    val following: Int = 0
 )
 
 @Serializable
-data class ImageData(
-    @Serializable(with = ObjectIdSerializer::class) val id: ObjectId? = null,
-    val userId: Int,
-    @Serializable(with = ObjectIdSerializer::class) val imageId: ObjectId
+data class TallyDto(
+    val tally: Int,
+    val userIds: List<Int>
 )
 
 class UserSchema(private val dbConnection: Connection, private val mongoDatabase: MongoDatabase) {
@@ -59,7 +59,9 @@ class UserSchema(private val dbConnection: Connection, private val mongoDatabase
         private const val UPDATE_USER_AVATAR = "UPDATE users SET image_url = ? WHERE id = ?"
         private const val UPDATE_USER_IMAGE_ID = "UPDATE users SET image_id = ? WHERE id = ?"
         private const val SELECT_IMAGE_ID = "SELECT image_id FROM users WHERE id = ?"
-
+        private const val SELECT_USER_LIKES = "SELECT liker_id FROM likes WHERE user_id = ?"
+        private const val SELECT_USER_FOLLOWERS = "SELECT follower_id FROM followers WHERE followed_id = ?"
+        private const val SELECT_USER_FOLLOWING = "SELECT followed_id FROM following WHERE user_id = ?"
     }
 
     init {
@@ -97,10 +99,23 @@ class UserSchema(private val dbConnection: Connection, private val mongoDatabase
         val statement = connection.prepareStatement(SELECT_USER_BY_EMAIL)
         statement.setString(1, email)
         val resultSet = statement.executeQuery()
+
         if (resultSet.next()) {
-            return@dbQuery resultSet.toUser()
+            val user = resultSet.toUser()
+
+            // Fetch counts
+            val likes = getUserLikes(user.id ?: throw IllegalStateException("User ID is null"))
+            val followers = getUserFollowers(user.id)
+            val following = getUserFollowing(user.id)
+
+            // Return the user with counts
+            user.copy(
+                likes = likes.tally,
+                followers = followers.tally,
+                following = following.tally
+            )
         } else {
-            return@dbQuery null
+            null
         }
     }
 
@@ -267,6 +282,43 @@ class UserSchema(private val dbConnection: Connection, private val mongoDatabase
         userDeleted
     }
 
+    suspend fun getUserLikes(userId: Int): TallyDto = dbQuery { connection ->
+        val statement = connection.prepareStatement(SELECT_USER_LIKES)
+        statement.setInt(1, userId)
+        val resultSet = statement.executeQuery()
+
+        val likerIds = mutableListOf<Int>()
+        while (resultSet.next()) resultSet.getInt("liker_id")
+
+        TallyDto(tally = likerIds.size, userIds = likerIds)
+    }
+
+    suspend fun getUserFollowers(userId: Int): TallyDto = dbQuery { connection ->
+        val statement = connection.prepareStatement(SELECT_USER_FOLLOWERS)
+        statement.setInt(1, userId)
+        val resultSet = statement.executeQuery()
+
+        val followerIds = mutableListOf<Int>()
+        while (resultSet.next()) {
+            followerIds.add(resultSet.getInt("follower_id"))
+        }
+
+        TallyDto(tally = followerIds.size, userIds = followerIds)
+    }
+
+    suspend fun getUserFollowing(userId: Int): TallyDto = dbQuery { connection ->
+        val statement = connection.prepareStatement(SELECT_USER_FOLLOWING)
+        statement.setInt(1, userId)
+        val resultSet = statement.executeQuery()
+
+        val followingIds = mutableListOf<Int>()
+        while (resultSet.next()) {
+            followingIds.add(resultSet.getInt("followed_id"))
+        }
+
+        TallyDto(tally = followingIds.size, userIds = followingIds)
+    }
+
     private fun ResultSet.toUser(): ExposedUser {
         return ExposedUser(
             id = getInt("id"),
@@ -278,7 +330,10 @@ class UserSchema(private val dbConnection: Connection, private val mongoDatabase
             passwordResetTokenExpiry = getTimestamp("password_reset_token_expiry")?.toLocalDateTime()
                 ?.toKotlinLocalDateTime(),
             imageId = getString("image_id")?.let { ObjectId(it) },
-            createdAt = getTimestamp("created_at").toLocalDateTime().toKotlinLocalDateTime()
+            createdAt = getTimestamp("created_at").toLocalDateTime().toKotlinLocalDateTime(),
+            likes = 0,
+            followers = 0,
+            following = 0
         )
     }
 

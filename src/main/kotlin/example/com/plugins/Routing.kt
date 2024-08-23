@@ -246,7 +246,8 @@ fun Application.configureRouting(
         }
 
         authenticate("auth-jwt") {
-            // This function loads the email configuration from a configuration file for the specified provider (e.g., "gmail" or "yahoo").
+            // This function loads the email configuration from a configuration file for the
+            // specified provider (e.g., "gmail" or "yahoo").
             fun loadEmailConfig(provider: String): EmailConfig {
                 val config: Config = ConfigFactory.load().getConfig("email.$provider")
 
@@ -404,6 +405,34 @@ fun Application.configureRouting(
                 )
             }
 
+            post("/signout") {
+                val request = try {
+                    call.receive<SignoutRequest>()
+                } catch (e: Exception) {
+                    call.respond(HttpStatusCode.BadRequest, "Invalid request body")
+                    return@post
+                }
+
+                // Check if user ID is valid
+                val user = userSchema.findById(request.userId)
+                if (user == null) {
+                    call.respond(HttpStatusCode.NotFound, "User not found")
+                    return@post
+                }
+
+                // Delete the user's refresh tokens
+                try {
+                    val deleteResult = tokenSchema.deleteTokensForUser(request.userId)
+                    if (deleteResult) {
+                        call.respond(HttpStatusCode.OK, "User signed out successfully")
+                    } else {
+                        call.respond(HttpStatusCode.InternalServerError, "Failed to sign out user")
+                    }
+                } catch (e: Exception) {
+                    call.respond(HttpStatusCode.InternalServerError, "Failed to sign out user: ${e.message}")
+                }
+            }
+
             delete("/delete-user/{userId}") {
                 val userId = call.parameters["userId"]?.toIntOrNull()
                 if (userId == null) {
@@ -452,7 +481,7 @@ fun Application.configureRouting(
                 }
             }
 
-            put("/update/{userId}/bio") {
+            put("/users/update/{userId}/bio") {
                 val id = call.parameters["userId"]?.toIntOrNull()
 
                 if (id == null) {
@@ -465,7 +494,7 @@ fun Application.configureRouting(
                 call.respond(HttpStatusCode.OK, ProfileFieldUpdateResponse("User bio updated"))
             }
 
-            put("/update/{userId}/occupation") {
+            put("/users/update/{userId}/occupation") {
                 val id = call.parameters["userId"]?.toIntOrNull()
 
                 if (id == null) {
@@ -478,7 +507,7 @@ fun Application.configureRouting(
                 call.respond(HttpStatusCode.OK, ProfileFieldUpdateResponse("User occupation updated"))
             }
 
-            put("/update/{userId}/username") {
+            put("/users/update/{userId}/username") {
                 val userId = call.parameters["userId"]?.toIntOrNull()
 
                 if (userId == null) {
@@ -491,7 +520,7 @@ fun Application.configureRouting(
                 call.respond(HttpStatusCode.OK, ProfileFieldUpdateResponse("User username updated"))
             }
 
-            post("/update/{userId}/image") {
+            post("/users/update/{userId}/image") {
                 val userId = call.parameters["userId"]?.toIntOrNull()
                     ?: return@post call.respond(
                         HttpStatusCode.BadRequest,
@@ -556,7 +585,7 @@ fun Application.configureRouting(
                 )
             }
 
-            get("/fetch/{userId}/image") {
+            get("/users/fetch/{userId}/image") {
                 val userId = call.parameters["userId"]?.toIntOrNull()
                     ?: return@get call.respond(HttpStatusCode.BadRequest, "User ID is missing")
 
@@ -578,32 +607,28 @@ fun Application.configureRouting(
                 }
             }
 
-            post("/signout") {
-                val request = try {
-                    call.receive<SignoutRequest>()
-                } catch (e: Exception) {
-                    call.respond(HttpStatusCode.BadRequest, "Invalid request body")
-                    return@post
-                }
+            get("/users/{userId}/likes") {
+                val userId = call.parameters["userId"]?.toIntOrNull()
+                    ?: return@get call.respond(HttpStatusCode.BadRequest, "Invalid user ID")
 
-                // Check if user ID is valid
-                val user = userSchema.findById(request.userId)
-                if (user == null) {
-                    call.respond(HttpStatusCode.NotFound, "User not found")
-                    return@post
-                }
+                val likes = userSchema.getUserLikes(userId)
+                call.respond(HttpStatusCode.OK, likes)
+            }
 
-                // Delete the user's refresh tokens
-                try {
-                    val deleteResult = tokenSchema.deleteTokensForUser(request.userId)
-                    if (deleteResult) {
-                        call.respond(HttpStatusCode.OK, "User signed out successfully")
-                    } else {
-                        call.respond(HttpStatusCode.InternalServerError, "Failed to sign out user")
-                    }
-                } catch (e: Exception) {
-                    call.respond(HttpStatusCode.InternalServerError, "Failed to sign out user: ${e.message}")
-                }
+            get("/users/{userId}/followers") {
+                val userId = call.parameters["userId"]?.toIntOrNull()
+                    ?: return@get call.respond(HttpStatusCode.BadRequest, "Invalid user ID")
+
+                val followers = userSchema.getUserFollowers(userId)
+                call.respond(HttpStatusCode.OK, followers)
+            }
+
+            get("/users/{userId}/following") {
+                val userId = call.parameters["userId"]?.toIntOrNull()
+                    ?: return@get call.respond(HttpStatusCode.BadRequest, "Invalid user ID")
+
+                val following = userSchema.getUserFollowing(userId)
+                call.respond(HttpStatusCode.OK, following)
             }
         }
     }
