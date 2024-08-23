@@ -24,6 +24,8 @@ import kotlinx.serialization.Serializable
 import org.bson.types.ObjectId
 import java.sql.Connection
 import java.sql.SQLException
+import java.text.SimpleDateFormat
+import java.util.Calendar
 
 @Serializable
 data class SignupRequestDto(val email: String, val password: String)
@@ -150,14 +152,16 @@ fun Application.configureRouting(
 
             // Generate a unique username
             val username = generateUniqueUsername(userSchema)
+            val timeZoneId = java.util.TimeZone.getDefault().id
+            val timeZone = TimeZone.of(timeZoneId)
 
             // Create a new user
             val newUser = ExposedUser(
                 email = user.email,
                 password = saltedHash.hash,
                 salt = saltedHash.salt,
-                createdAt = Clock.System.now().toLocalDateTime(TimeZone.of(java.util.TimeZone.getDefault().id)),
-                username = username,
+                createdAt = Clock.System.now().toLocalDateTime(timeZone),
+                username = username, // This should be taken from the user's device
                 imageUrl = null,
             )
 
@@ -220,13 +224,15 @@ fun Application.configureRouting(
             // Generate tokens
             val accessToken = tokenService.generateAccessToken(TokenClaim("userId", user.id.toString()))
             val refreshToken = tokenService.generateRefreshToken()
+            val timeZoneId = java.util.TimeZone.getDefault().id
+            val timeZone = TimeZone.of(timeZoneId)
 
             // Store the refresh token
             val tokenModel = Token(
                 userId = user.id,
                 token = refreshToken,
-                expiresAt = Clock.System.now().plus(7, DateTimeUnit.DAY, TimeZone.currentSystemDefault()).toLocalDateTime(TimeZone.currentSystemDefault()),
-                createdAt = Clock.System.now().toLocalDateTime(TimeZone.currentSystemDefault())
+                expiresAt = Clock.System.now().plus(7, DateTimeUnit.DAY, timeZone).toLocalDateTime(timeZone),
+                createdAt = Clock.System.now().toLocalDateTime(timeZone)
             )
 
             // Check if existingRefreshToken is null

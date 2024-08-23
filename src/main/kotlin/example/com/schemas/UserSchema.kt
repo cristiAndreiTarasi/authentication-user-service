@@ -31,9 +31,6 @@ data class ExposedUser(
     val imageUrl: String? = null,
     @Serializable(with = ObjectIdSerializer::class) var imageId: ObjectId? = null,
     val createdAt: LocalDateTime,
-    val likes: Int = 0,
-    val followers: Int = 0,
-    val following: Int = 0
 )
 
 @Serializable
@@ -61,7 +58,7 @@ class UserSchema(private val dbConnection: Connection, private val mongoDatabase
         private const val SELECT_IMAGE_ID = "SELECT image_id FROM users WHERE id = ?"
         private const val SELECT_USER_LIKES = "SELECT liker_id FROM likes WHERE user_id = ?"
         private const val SELECT_USER_FOLLOWERS = "SELECT follower_id FROM followers WHERE followed_id = ?"
-        private const val SELECT_USER_FOLLOWING = "SELECT followed_id FROM following WHERE user_id = ?"
+        private const val SELECT_USER_FOLLOWING = "SELECT followed_id FROM followers WHERE follower_id = ?"
     }
 
     init {
@@ -101,21 +98,9 @@ class UserSchema(private val dbConnection: Connection, private val mongoDatabase
         val resultSet = statement.executeQuery()
 
         if (resultSet.next()) {
-            val user = resultSet.toUser()
-
-            // Fetch counts
-            val likes = getUserLikes(user.id ?: throw IllegalStateException("User ID is null"))
-            val followers = getUserFollowers(user.id)
-            val following = getUserFollowing(user.id)
-
-            // Return the user with counts
-            user.copy(
-                likes = likes.tally,
-                followers = followers.tally,
-                following = following.tally
-            )
+            return@dbQuery resultSet.toUser()
         } else {
-            null
+            return@dbQuery null
         }
     }
 
@@ -331,9 +316,6 @@ class UserSchema(private val dbConnection: Connection, private val mongoDatabase
                 ?.toKotlinLocalDateTime(),
             imageId = getString("image_id")?.let { ObjectId(it) },
             createdAt = getTimestamp("created_at").toLocalDateTime().toKotlinLocalDateTime(),
-            likes = 0,
-            followers = 0,
-            following = 0
         )
     }
 
