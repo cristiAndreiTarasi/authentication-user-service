@@ -10,6 +10,7 @@ import kotlinx.serialization.encoding.Decoder
 import kotlinx.serialization.encoding.Encoder
 import org.bson.types.ObjectId
 import java.time.Instant
+import java.time.LocalDate
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
 
@@ -52,5 +53,21 @@ object ObjectIdSerializer : KSerializer<ObjectId> {
 
     override fun deserialize(decoder: Decoder): ObjectId {
         return ObjectId(decoder.decodeString())
+    }
+}
+
+object LocalDateSerializer : KSerializer<LocalDate> {
+    private val formatter = DateTimeFormatter.ofPattern("d MMM yyyy")
+
+    override val descriptor: SerialDescriptor = PrimitiveSerialDescriptor("LocalDate", PrimitiveKind.STRING)
+
+    override fun serialize(encoder: Encoder, value: LocalDate) {
+        val string = value.format(formatter)
+        encoder.encodeString(string)
+    }
+
+    override fun deserialize(decoder: Decoder): LocalDate {
+        val string = decoder.decodeString()
+        return LocalDate.parse(string, formatter)
     }
 }

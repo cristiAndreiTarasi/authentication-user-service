@@ -25,10 +25,17 @@ import org.bson.types.ObjectId
 import java.sql.Connection
 import java.sql.SQLException
 import java.text.SimpleDateFormat
+import java.time.LocalDate
+import java.time.format.DateTimeFormatter
 import java.util.Calendar
 
 @Serializable
-data class SignupRequestDto(val email: String, val password: String)
+data class SignupRequestDto(
+    val email: String,
+    val password: String,
+    val birthDate: String,
+    val timezone: String
+)
 
 @Serializable
 data class SigninRequestDto(val email: String, val password: String)
@@ -53,6 +60,9 @@ data class ResetResponse(val message: String)
 
 @Serializable
 data class SignoutRequest(val userId: Int)
+
+@Serializable
+data class SignoutResponse(val message: String)
 
 @Serializable
 data class AuthResponseDto(val accessToken: String, val refreshToken: String)
@@ -152,14 +162,14 @@ fun Application.configureRouting(
 
             // Generate a unique username
             val username = generateUniqueUsername(userSchema)
-            val timeZoneId = java.util.TimeZone.getDefault().id
-            val timeZone = TimeZone.of(timeZoneId)
+            val timeZone = TimeZone.of(user.timezone)
 
             // Create a new user
             val newUser = ExposedUser(
                 email = user.email,
                 password = saltedHash.hash,
                 salt = saltedHash.salt,
+                birthDate = LocalDate.parse(user.birthDate, DateTimeFormatter.ofPattern("d MMM yyyy")),
                 createdAt = Clock.System.now().toLocalDateTime(timeZone),
                 username = username, // This should be taken from the user's device
                 imageUrl = null,
@@ -415,14 +425,14 @@ fun Application.configureRouting(
                 val request = try {
                     call.receive<SignoutRequest>()
                 } catch (e: Exception) {
-                    call.respond(HttpStatusCode.BadRequest, "Invalid request body")
+                    call.respond(HttpStatusCode.BadRequest, SignoutResponse("Invalid request body"))
                     return@post
                 }
 
                 // Check if user ID is valid
                 val user = userSchema.findById(request.userId)
                 if (user == null) {
-                    call.respond(HttpStatusCode.NotFound, "User not found")
+                    call.respond(HttpStatusCode.NotFound, SignoutResponse("User not found"))
                     return@post
                 }
 
@@ -430,12 +440,12 @@ fun Application.configureRouting(
                 try {
                     val deleteResult = tokenSchema.deleteTokensForUser(request.userId)
                     if (deleteResult) {
-                        call.respond(HttpStatusCode.OK, "User signed out successfully")
+                        call.respond(HttpStatusCode.OK, SignoutResponse("User signed out successfully"))
                     } else {
-                        call.respond(HttpStatusCode.InternalServerError, "Failed to sign out user")
+                        call.respond(HttpStatusCode.InternalServerError, SignoutResponse("Failed to sign out user"))
                     }
                 } catch (e: Exception) {
-                    call.respond(HttpStatusCode.InternalServerError, "Failed to sign out user: ${e.message}")
+                    call.respond(HttpStatusCode.InternalServerError, SignoutResponse("Failed to sign out user: ${e.message}"))
                 }
             }
 
