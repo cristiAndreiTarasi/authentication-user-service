@@ -24,10 +24,8 @@ import kotlinx.serialization.Serializable
 import org.bson.types.ObjectId
 import java.sql.Connection
 import java.sql.SQLException
-import java.text.SimpleDateFormat
 import java.time.LocalDate
 import java.time.format.DateTimeFormatter
-import java.util.Calendar
 
 @Serializable
 data class SignupRequestDto(
@@ -50,7 +48,7 @@ data class RefreshTokenRequest(val refreshToken: String)
 data class ForgotPasswordRequest(val email: String)
 
 @Serializable
-data class RefreshTokenResponse(val accessToken: String, val refreshToken: String, val message: String)
+data class RefreshTokenResponse(val newAccessToken: String, val newRefreshToken: String, val message: String)
 
 @Serializable
 data class ForgotResponse(val message: String)
@@ -173,6 +171,7 @@ fun Application.configureRouting(
                 createdAt = Clock.System.now().toLocalDateTime(timeZone),
                 username = username, // This should be taken from the user's device
                 imageUrl = null,
+                timezone = user.timezone
             )
 
             // Save the user to the database
@@ -234,8 +233,8 @@ fun Application.configureRouting(
             // Generate tokens
             val accessToken = tokenService.generateAccessToken(TokenClaim("userId", user.id.toString()))
             val refreshToken = tokenService.generateRefreshToken()
-            val timeZoneId = java.util.TimeZone.getDefault().id
-            val timeZone = TimeZone.of(timeZoneId)
+
+            val timeZone = TimeZone.of(user.timezone)
 
             // Store the refresh token
             val tokenModel = Token(
@@ -258,6 +257,47 @@ fun Application.configureRouting(
                     message = "Successful authentication.",
                     user
                 )
+            )
+        }
+
+        post("/token-refresh") {
+            val request = call.receive<RefreshTokenRequest>()
+            val storedToken = tokenSchema.findByToken(request.refreshToken)
+
+            if (storedToken == null || !isTokenValid(storedToken.expiresAt)) {
+                call.respond(HttpStatusCode.Unauthorized, "Invalid refresh token. Sign in.")
+                return@post
+            }
+
+            // Fetch the user to get their timezone
+            val user = userSchema.findById(storedToken.userId)
+            if (user == null) {
+                call.respond(HttpStatusCode.Unauthorized, "User not found.")
+                return@post
+            }
+
+            val timeZone = TimeZone.of(user.timezone)
+
+            val newAccessToken = tokenService.generateAccessToken(TokenClaim("userId", storedToken.userId.toString()))
+            val newRefreshToken = tokenService.generateRefreshToken()
+
+            tokenSchema.deleteTokensForUser(storedToken.userId)
+
+            val newTokenModel = Token(
+                userId = storedToken.userId,
+                token = newRefreshToken,
+                expiresAt = Clock.System.now().plus(7, DateTimeUnit.DAY, TimeZone.currentSystemDefault()).toLocalDateTime(TimeZone.currentSystemDefault()),
+                createdAt = Clock.System.now().toLocalDateTime(timeZone)
+            )
+
+            tokenSchema.create(newTokenModel)
+            println("*******************************************************************************" +
+                    "*************************************************************: $newAccessToken")
+            println("*******************************************************************************" +
+                    "*************************************************************: $newRefreshToken")
+            call.respond(
+                HttpStatusCode.Created,
+                RefreshTokenResponse(newAccessToken, newRefreshToken, "Token refreshed")
             )
         }
 
@@ -390,35 +430,6 @@ fun Application.configureRouting(
                         )
                     )
                 }
-            }
-
-            post("/token-refresh") {
-                val request = call.receive<RefreshTokenRequest>()
-                val storedToken = tokenSchema.findByToken(request.refreshToken)
-
-
-
-                if (storedToken == null || !isTokenValid(storedToken.expiresAt)) {
-                    call.respond(HttpStatusCode.Unauthorized, "Invalid refresh token. Sign in.")
-                    return@post
-                }
-
-                val newAccessToken = tokenService.generateAccessToken(TokenClaim("userId", storedToken.userId.toString()))
-                val newRefreshToken = tokenService.generateRefreshToken()
-
-                val newTokenModel = Token(
-                    userId = storedToken.userId,
-                    token = newRefreshToken,
-                    expiresAt = Clock.System.now().plus(7, DateTimeUnit.DAY, TimeZone.currentSystemDefault()).toLocalDateTime(TimeZone.currentSystemDefault()),
-                    createdAt = Clock.System.now().toLocalDateTime(TimeZone.currentSystemDefault())
-                )
-
-                tokenSchema.update(newTokenModel)
-
-                call.respond(
-                    HttpStatusCode.Created,
-                    RefreshTokenResponse(newAccessToken, newRefreshToken, "Token refreshed")
-                )
             }
 
             post("/signout") {

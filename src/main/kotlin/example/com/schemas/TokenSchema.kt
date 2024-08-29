@@ -22,7 +22,7 @@ class TokenSchema(private val dbConnection: Connection) {
         private const val INSERT_TOKEN = "INSERT INTO tokens (user_id, token, created_at, expires_at) VALUES (?, ?, ?, ?)"
         private const val SELECT_TOKEN = "SELECT * FROM tokens WHERE token = ?"
         private const val SELECT_TOKEN_BY_USER_ID = "SELECT * FROM tokens WHERE user_id = ?"
-        private const val UPDATE_TOKEN = "UPDATE tokens SET token = ?, expires_at = ? WHERE user_id = ?"
+        private const val UPDATE_TOKEN = "UPDATE tokens SET token = ?, expires_at = ?, created_at = ? WHERE user_id = ?"
         private const val DELETE_TOKENS_FOR_USER = "DELETE FROM tokens WHERE user_id = ?"
     }
 
@@ -80,7 +80,8 @@ class TokenSchema(private val dbConnection: Connection) {
         val statement = connection.prepareStatement(UPDATE_TOKEN)
         statement.setString(1, tokenModel.token)
         statement.setTimestamp(2, Timestamp.valueOf(tokenModel.expiresAt.toJavaLocalDateTime()))
-        statement.setInt(3, tokenModel.userId)
+        statement.setTimestamp(3, Timestamp.valueOf(tokenModel.createdAt.toJavaLocalDateTime()))
+        statement.setInt(4, tokenModel.userId)
         statement.executeUpdate() > 0
     }
 

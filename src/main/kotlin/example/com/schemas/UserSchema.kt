@@ -32,11 +32,10 @@ data class ExposedUser(
     val bio: String? = null,
     val occupation: String? = null,
     val imageUrl: String? = null,
-    @Serializable(with = LocalDateSerializer::class)
-    val birthDate: LocalDate? = null,
-    @Serializable(with = ObjectIdSerializer::class)
-    val imageId: ObjectId? = null,
+    @Serializable(with = LocalDateSerializer::class) val birthDate: LocalDate? = null,
+    @Serializable(with = ObjectIdSerializer::class) val imageId: ObjectId? = null,
     val createdAt: LocalDateTime,
+    val timezone: String
 )
 
 @Serializable
@@ -47,7 +46,7 @@ data class TallyDto(
 
 class UserSchema(private val dbConnection: Connection, private val mongoDatabase: MongoDatabase) {
     companion object {
-        private const val INSERT_USER = "INSERT INTO users (email, password, salt, username, created_at, birth_date) VALUES (?, ?, ?, ?, ?, ?)"
+        private const val INSERT_USER = "INSERT INTO users (email, password, salt, username, bio, occupation, created_at, birth_date, timezone) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
         private const val SELECT_USER_BY_EMAIL = "SELECT * FROM users WHERE email = ?"
         private const val SELECT_USER_BY_USERNAME = "SELECT * FROM users WHERE username = ?"
         private const val SELECT_USER_BY_ID = "SELECT * FROM users WHERE id = ?"
@@ -86,8 +85,11 @@ class UserSchema(private val dbConnection: Connection, private val mongoDatabase
         statement.setString(2, user.password)
         statement.setString(3, user.salt)
         statement.setString(4, user.username)
-        statement.setTimestamp(5, Timestamp.valueOf(user.createdAt.toJavaLocalDateTime()))
-        statement.setDate(6, user.birthDate.let { Date.valueOf(it) })
+        statement.setString(5, user.bio)
+        statement.setString(6, user.occupation)
+        statement.setTimestamp(7, Timestamp.valueOf(user.createdAt.toJavaLocalDateTime()))
+        statement.setDate(8, user.birthDate.let { Date.valueOf(it) })
+        statement.setString(9, user.timezone)
 
         statement.executeUpdate()
         val generatedKeys = statement.generatedKeys
@@ -319,12 +321,15 @@ class UserSchema(private val dbConnection: Connection, private val mongoDatabase
             password = getString("password"),
             salt = getString("salt"),
             username = getString("username"),
+            bio = getString("bio"),
+            occupation = getString("occupation"),
             passwordResetToken = getString("password_reset_token"),
             passwordResetTokenExpiry = getTimestamp("password_reset_token_expiry")?.toLocalDateTime()
                 ?.toKotlinLocalDateTime(),
             imageId = getString("image_id")?.let { ObjectId(it) },
             birthDate = getDate("birth_date").toLocalDate(),
             createdAt = getTimestamp("created_at").toLocalDateTime().toKotlinLocalDateTime(),
+            timezone = getString("timezone")
         )
     }
 
