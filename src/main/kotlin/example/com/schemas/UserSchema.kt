@@ -9,7 +9,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.datetime.LocalDateTime
 import kotlinx.datetime.toJavaLocalDateTime
-import kotlinx.datetime.toKotlinLocalDate
 import kotlinx.datetime.toKotlinLocalDateTime
 import kotlinx.serialization.Serializable
 import org.bson.Document
@@ -35,7 +34,7 @@ data class ExposedUser(
     @Serializable(with = LocalDateSerializer::class) val birthDate: LocalDate? = null,
     @Serializable(with = ObjectIdSerializer::class) val imageId: ObjectId? = null,
     val createdAt: LocalDateTime,
-    val timezone: String
+    val timezoneId: String
 )
 
 @Serializable
@@ -66,18 +65,6 @@ class UserSchema(private val dbConnection: Connection, private val mongoDatabase
         private const val SELECT_USER_FOLLOWING = "SELECT followed_id FROM followers WHERE follower_id = ?"
     }
 
-    init {
-        dbConnection.createStatement()
-    }
-
-    private suspend fun <T> dbQuery(block: suspend (Connection) -> T): T = withContext(Dispatchers.IO) {
-        try {
-            block(dbConnection)
-        } catch (e: SQLException) {
-            throw RuntimeException("Database query failed: ${e.message}", e)
-        }
-    }
-
     suspend fun insertUser(user: ExposedUser): Int = dbQuery { connection ->
         val statement = connection.prepareStatement(INSERT_USER, Statement.RETURN_GENERATED_KEYS)
 
@@ -89,7 +76,7 @@ class UserSchema(private val dbConnection: Connection, private val mongoDatabase
         statement.setString(6, user.occupation)
         statement.setTimestamp(7, Timestamp.valueOf(user.createdAt.toJavaLocalDateTime()))
         statement.setDate(8, user.birthDate.let { Date.valueOf(it) })
-        statement.setString(9, user.timezone)
+        statement.setString(9, user.timezoneId)
 
         statement.executeUpdate()
         val generatedKeys = statement.generatedKeys
@@ -329,7 +316,7 @@ class UserSchema(private val dbConnection: Connection, private val mongoDatabase
             imageId = getString("image_id")?.let { ObjectId(it) },
             birthDate = getDate("birth_date").toLocalDate(),
             createdAt = getTimestamp("created_at").toLocalDateTime().toKotlinLocalDateTime(),
-            timezone = getString("timezone")
+            timezoneId = getString("timezone")
         )
     }
 
@@ -337,5 +324,13 @@ class UserSchema(private val dbConnection: Connection, private val mongoDatabase
         val users = mutableListOf<ExposedUser>()
         while (next()) users.add(toUser())
         return users
+    }
+
+    private suspend fun <T> dbQuery(block: suspend (Connection) -> T): T = withContext(Dispatchers.IO) {
+        try {
+            block(dbConnection)
+        } catch (e: SQLException) {
+            throw RuntimeException("Database query failed: ${e.message}", e)
+        }
     }
 }

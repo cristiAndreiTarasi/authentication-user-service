@@ -3,6 +3,7 @@ package example.com
 import com.mongodb.client.gridfs.GridFSBuckets
 import example.com.config.Constants
 import example.com.plugins.*
+import example.com.schemas.StreamSchema
 import example.com.schemas.TokenSchema
 import example.com.schemas.UserSchema
 import example.com.services.hashing.HashingService
@@ -25,7 +26,7 @@ fun Application.module() {
     val tokenConfig = TokenConfig(
         issuer = environment.config.property("jwt.issuer").getString(),
         audience = environment.config.property("jwt.audience").getString(),
-        accessExpiresIn = Duration.ofMinutes(10), // one hour
+        accessExpiresIn = Duration.ofMinutes(60), // one hour
         refreshExpiresIn = Duration.ofDays(7), // one week
         secret = Constants.JWT_SECRET
     )
@@ -34,9 +35,10 @@ fun Application.module() {
     val tokenService = TokenService(tokenConfig)
     val userSchema = UserSchema(postgresConnection, mongoDatabase)
     val tokenSchema = TokenSchema(postgresConnection)
+    val streamSchema = StreamSchema(postgresConnection);
 
     configureSerialization()
     configureHTTP()
     configureSecurity()
-    configureRouting(userSchema, tokenSchema, hashingService, tokenService, postgresConnection)
+    configureRouting(userSchema, tokenSchema, streamSchema, hashingService, tokenService, postgresConnection)
 }
