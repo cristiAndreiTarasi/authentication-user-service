@@ -1,10 +1,9 @@
 package example.com.schemas
 
-import example.com.plugins.routes.CategoryDto
+import example.com.PrivacyOptions
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.datetime.LocalDateTime
-import kotlinx.datetime.TimeZone
 import kotlinx.datetime.toJavaLocalDateTime
 import kotlinx.datetime.toKotlinLocalDateTime
 import kotlinx.serialization.Serializable
@@ -15,14 +14,11 @@ import java.sql.Statement
 import java.sql.Timestamp
 
 @Serializable
-data class StreamDataModel(
+data class StreamDto(
     val id: Int? = null,
     val title: String,
-    val description: String,
     val userId: Int,
-    val startTime: String?,
-    val endTime: String? = null,
-    val isPublic: Boolean,
+    val privacyType: PrivacyOptions,
     val isTicketed: Boolean,
     var categories: List<CategoryDto>,
     var tags: List<String>,
@@ -30,12 +26,16 @@ data class StreamDataModel(
     val thumbnailId: String? = null
 )
 
-class StreamSchema(private val dbConnection: Connection) {
+class StreamSchema(
+    private val dbConnection: Connection,
+    private val categorySchema: CategorySchema,
+    private val tagSchema: TagSchema
+) {
     companion object {
         private const val INSERT_STREAM = """
             INSERT INTO streams 
-            (title, description, user_id, start_time, end_time, is_public, is_ticketed, created_at) 
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            (title, user_id, privacy_type, is_ticketed, thumbnail_id, created_at) 
+            VALUES (?, ?, ?, ?, ?, ?)
         """
         private const val SELECT_STREAM_BY_ID = "SELECT * FROM streams WHERE id = ?"
         private const val SELECT_ALL_STREAMS = "SELECT * FROM streams"
@@ -49,17 +49,15 @@ class StreamSchema(private val dbConnection: Connection) {
         private const val DELETE_STREAM = "DELETE FROM streams WHERE id = ?"
     }
 
-    suspend fun create(stream: StreamDataModel): Int = dbQuery { connection ->
+    suspend fun create(stream: StreamDto): Int = dbQuery { connection ->
         val statement = connection.prepareStatement(INSERT_STREAM, Statement.RETURN_GENERATED_KEYS)
 
         statement.setString(1, stream.title)
-        statement.setString(2, stream.description)
-        statement.setInt(3, stream.userId)
-        statement.setString(4, stream.startTime)
-        statement.setString(5, stream.endTime)
-        statement.setBoolean(6, stream.isPublic)
-        statement.setBoolean(7, stream.isTicketed)
-        statement.setTimestamp(8, Timestamp.valueOf(stream.createdAt.toJavaLocalDateTime()))
+        statement.setInt(2, stream.userId)
+        statement.setString(3, stream.privacyType.displayName)
+        statement.setBoolean(4, stream.isTicketed)
+        statement.setString(5, stream.thumbnailId)
+        statement.setTimestamp(6, Timestamp.valueOf(stream.createdAt.toJavaLocalDateTime()))
 
         statement.executeUpdate()
 
@@ -68,8 +66,8 @@ class StreamSchema(private val dbConnection: Connection) {
             val streamId = generatedKeys.getInt(1)
 
             // Insert categories and tags separately
-            insertCategories(streamId, stream.categories, connection)
-            insertTags(streamId, stream.tags, connection)
+            categorySchema.insertCategoriesForStream(streamId, stream.categories, connection)
+            tagSchema.insertTagsForStream(streamId, stream.tags)
 
             return@dbQuery streamId
         } else {
@@ -77,55 +75,9 @@ class StreamSchema(private val dbConnection: Connection) {
         }
     }
 
-    // Helper functions to insert categories and tags
-    private fun insertCategories(streamId: Int, categories: List<CategoryDto>, connection: Connection) {
-        val statement = connection.prepareStatement("INSERT INTO stream_categories (stream_id, category_id) VALUES (?, ?)")
-        for (category in categories) {
-            statement.setInt(1, streamId)
-            statement.setInt(2, category.id)
-            statement.addBatch()
-        }
-        statement.executeBatch()
-    }
-
-    private fun insertTags(streamId: Int, tags: List<String>, connection: Connection) {
-        val statement = connection.prepareStatement("INSERT INTO stream_tags (stream_id, tag) VALUES (?, ?)")
-        for (tag in tags) {
-            statement.setInt(1, streamId)
-            statement.setString(2, tag)
-            statement.addBatch()
-        }
-        statement.executeBatch()
-    }
-
-    private fun getCategoriesByStreamId(streamId: Int, connection: Connection): List<CategoryDto> {
-        val categories = mutableListOf<CategoryDto>()
-        val statement = connection.prepareStatement("SELECT c.id, c.name FROM categories c JOIN stream_categories sc ON c.id = sc.category_id WHERE sc.stream_id = ?")
-        statement.setInt(1, streamId)
-        val resultSet = statement.executeQuery()
-
-        while (resultSet.next()) {
-            categories.add(CategoryDto(resultSet.getInt("id"), resultSet.getString("name")))
-        }
-
-        return categories
-    }
-
-    private fun getTagsByStreamId(streamId: Int, connection: Connection): List<String> {
-        val tags = mutableListOf<String>()
-        val statement = connection.prepareStatement("SELECT tag FROM stream_tags WHERE stream_id = ?")
-        statement.setInt(1, streamId)
-        val resultSet = statement.executeQuery()
-
-        while (resultSet.next()) {
-            tags.add(resultSet.getString("tag"))
-        }
-
-        return tags
-    }
 
     // Function to fetch a stream by ID
-    suspend fun findById(streamId: Int): StreamDataModel? = dbQuery { connection ->
+    suspend fun findById(streamId: Int): StreamDto? = dbQuery { connection ->
         val statement = connection.prepareStatement(SELECT_STREAM_BY_ID)
         statement.setInt(1, streamId)
 
@@ -134,8 +86,8 @@ class StreamSchema(private val dbConnection: Connection) {
         if (resultSet.next()) {
             val stream = resultSet.toStreamDataModel()
 
-            stream.categories = getCategoriesByStreamId(stream.id!!, connection)
-            stream.tags = getTagsByStreamId(stream.id, connection)
+            stream.categories = categorySchema.getCategoriesByStreamId(stream.id!!)
+            stream.tags = tagSchema.getTagsByStreamId(stream.id)
 
             return@dbQuery stream
         } else {
@@ -144,11 +96,11 @@ class StreamSchema(private val dbConnection: Connection) {
     }
 
     // Function to fetch all streams
-    suspend fun findAll(): List<StreamDataModel> = dbQuery { connection ->
+    suspend fun findAll(): List<StreamDto> = dbQuery { connection ->
         val statement = connection.prepareStatement(SELECT_ALL_STREAMS)
         val resultSet = statement.executeQuery()
 
-        val streams = mutableListOf<StreamDataModel>()
+        val streams = mutableListOf<StreamDto>()
 
         while (resultSet.next()) {
             streams.add(resultSet.toStreamDataModel())
@@ -157,12 +109,12 @@ class StreamSchema(private val dbConnection: Connection) {
     }
 
     // Function to fetch streams filtered by category
-    suspend fun findByCategory(categoryId: Int): List<StreamDataModel> = dbQuery { connection ->
+    suspend fun findByCategory(categoryId: Int): List<StreamDto> = dbQuery { connection ->
         val statement = connection.prepareStatement(SELECT_STREAMS_BY_CATEGORY)
         statement.setInt(1, categoryId)
 
         val resultSet = statement.executeQuery()
-        val streams = mutableListOf<StreamDataModel>()
+        val streams = mutableListOf<StreamDto>()
 
         while (resultSet.next()) {
             streams.add(resultSet.toStreamDataModel())
@@ -171,12 +123,12 @@ class StreamSchema(private val dbConnection: Connection) {
     }
 
     // Function to fetch streams filtered by tag
-    suspend fun findByTag(tag: String): List<StreamDataModel> = dbQuery { connection ->
+    suspend fun findByTag(tag: String): List<StreamDto> = dbQuery { connection ->
         val statement = connection.prepareStatement(SELECT_STREAMS_BY_TAG)
         statement.setString(1, tag)
 
         val resultSet = statement.executeQuery()
-        val streams = mutableListOf<StreamDataModel>()
+        val streams = mutableListOf<StreamDto>()
 
         while (resultSet.next()) {
             streams.add(resultSet.toStreamDataModel())
@@ -187,22 +139,25 @@ class StreamSchema(private val dbConnection: Connection) {
 
     // Function to delete a stream
     suspend fun delete(streamId: Int): Boolean = dbQuery { connection ->
-        val statement = connection.prepareStatement(DELETE_STREAM)
+        val stream = findById(streamId)
+        if (stream != null) {
+            // Delete associated categories and tags first
+            categorySchema.deleteCategoriesForStream(streamId, stream.categories)
+            tagSchema.deleteTagsForStream(streamId, stream.tags, connection)
+        }
 
+        val statement = connection.prepareStatement(DELETE_STREAM)
         statement.setInt(1, streamId)
-        statement.executeUpdate() > 0
+        return@dbQuery statement.executeUpdate() > 0
     }
 
     // Helper function to map ResultSet to Stream object
-    private fun ResultSet.toStreamDataModel(): StreamDataModel {
-        return StreamDataModel(
+    private fun ResultSet.toStreamDataModel(): StreamDto {
+        return StreamDto(
             id = getInt("id"),
             title = getString("title"),
-            description = getString("description"),
             userId = getInt("user_id"),
-            startTime = getString("start_time"),
-            endTime = getString("end_time"),
-            isPublic = getBoolean("is_public"),
+            privacyType = PrivacyOptions.entries.first { it.displayName == getString("privacy_type") },
             isTicketed = getBoolean("is_ticketed"),
             categories = emptyList(),  // Initially empty, will be filled in findById
             tags = emptyList(),        // Initially empty, will be filled in findById
@@ -211,8 +166,8 @@ class StreamSchema(private val dbConnection: Connection) {
         )
     }
 
-    private fun ResultSet.toStreams(): List<StreamDataModel> {
-        val streams = mutableListOf<StreamDataModel>()
+    private fun ResultSet.toStreams(): List<StreamDto> {
+        val streams = mutableListOf<StreamDto>()
         while (next()) streams.add(toStreamDataModel())
         return streams
     }

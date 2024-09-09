@@ -189,11 +189,6 @@ class UserSchema(private val dbConnection: Connection, private val mongoDatabase
         val previousImage = getImageIdByUserId(userId)?.let { ObjectId(it) }
         previousImage?.let { deleteImage(it) }
 
-        // Delete old image if it exists
-        if (previousImage != null) {
-            deleteImage(previousImage)
-        }
-
         val options = GridFSUploadOptions().chunkSizeBytes(255 * 1024) // 255KB
         val streamToUploadFrom: InputStream = ByteArrayInputStream(imageData)
         val fileId = gridFSBuckets.uploadFromStream("image", streamToUploadFrom, options)

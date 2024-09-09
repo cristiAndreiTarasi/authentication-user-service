@@ -3,7 +3,9 @@ package example.com
 import com.mongodb.client.gridfs.GridFSBuckets
 import example.com.config.Constants
 import example.com.plugins.*
+import example.com.schemas.CategorySchema
 import example.com.schemas.StreamSchema
+import example.com.schemas.TagSchema
 import example.com.schemas.TokenSchema
 import example.com.schemas.UserSchema
 import example.com.services.hashing.HashingService
@@ -35,7 +37,9 @@ fun Application.module() {
     val tokenService = TokenService(tokenConfig)
     val userSchema = UserSchema(postgresConnection, mongoDatabase)
     val tokenSchema = TokenSchema(postgresConnection)
-    val streamSchema = StreamSchema(postgresConnection);
+    val categorySchema = CategorySchema(postgresConnection)
+    val tagSchema = TagSchema(postgresConnection)
+    val streamSchema = StreamSchema(postgresConnection, categorySchema, tagSchema);
 
     configureSerialization()
     configureHTTP()

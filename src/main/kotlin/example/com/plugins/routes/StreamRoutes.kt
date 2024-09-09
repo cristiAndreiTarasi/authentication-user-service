@@ -1,23 +1,24 @@
 package example.com.plugins.routes
 
-import example.com.schemas.StreamDataModel
+import example.com.PrivacyOptions
+import example.com.schemas.CategoryDto
+import example.com.schemas.StreamDto
 import example.com.schemas.StreamSchema
-import example.com.schemas.TokenSchema
 import example.com.schemas.UserSchema
-import example.com.services.hashing.HashingService
-import example.com.services.token.TokenService
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.content.PartData
 import io.ktor.http.content.forEachPart
 import io.ktor.http.content.streamProvider
 import io.ktor.server.application.call
 import io.ktor.server.auth.authenticate
-import io.ktor.server.request.receive
 import io.ktor.server.request.receiveMultipart
 import io.ktor.server.response.respond
 import io.ktor.server.routing.Route
 import io.ktor.server.routing.*
+import kotlinx.datetime.Clock
 import kotlinx.datetime.LocalDateTime
+import kotlinx.datetime.TimeZone
+import kotlinx.datetime.toLocalDateTime
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import org.bson.types.ObjectId
@@ -25,34 +26,19 @@ import org.bson.types.ObjectId
 @Serializable
 data class CreateStreamRequest(
     val title: String,
-    val description: String,
     val userId: Int,
-    val startTime: String,
-    // Option 1: Set a default end time (e.g., 1 hour after start) if not provided.
-    // Option 2: Make endTime nullable and handle it only if explicitly set by the client.
-    val endTime: String? = null,
-    val isPublic: Boolean,
+    val privacyType: PrivacyOptions,
     val isTicketed: Boolean,
     val categories: List<CategoryDto>,
-    val tags: List<String>,
-    val createdAt: LocalDateTime,
-    val thumbnailId: String? = null // ID of the uploaded thumbnail in GridFS
-)
-
-@Serializable
-data class CategoryDto(
-    val id: Int,
-    val name: String
+    val tags: List<String>/* = emptyList()*/,
+    val timezoneId: String
 )
 
 @Serializable
 data class StreamResponse(
     val title: String,
-    val description: String,
     val userId: Int,
-    val startTime: String?,
-    val endTime: String? = null,
-    val isPublic: Boolean,
+    val privacyType: PrivacyOptions,
     val isTicketed: Boolean,
     val categories: List<CategoryDto>,
     val tags: List<String>,
@@ -60,16 +46,10 @@ data class StreamResponse(
     val thumbnailId: String? = null
 )
 
-@Serializable
-data class UpdateStreamRequest(
-    val title: String,
-    val description: String,
-    val startTime: LocalDateTime? = null,
-    val endTime: LocalDateTime? = null,
-    val isPublic: Boolean,
-    val isTicketed: Boolean,
-    val categoryId: Int
-)
+enum class PartDataItems(val displayName: String) {
+    METADATA("metadata"),
+    THUMBNAIL("thumbnail")
+}
 
 fun Route.streamRoutes(
     streamSchema: StreamSchema,
@@ -80,15 +60,15 @@ fun Route.streamRoutes(
         post("/streams/start") {
             val multipartData = call.receiveMultipart()
 
-            var createStreamRequest: CreateStreamRequest? = null
+            var streamMetaData: CreateStreamRequest? = null
             var thumbnailContent: ByteArray? = null
 
             multipartData.forEachPart { part ->
                 when (part) {
                     is PartData.FormItem -> {
-                        if (part.name === "metadata") {
+                        if (part.name == PartDataItems.METADATA.displayName) {
                             // Deserialize the metadata from JSON string
-                            createStreamRequest = Json.decodeFromString(
+                            streamMetaData = Json.decodeFromString(
                                 CreateStreamRequest.serializer(),
                                 part.value
                             )
@@ -96,7 +76,7 @@ fun Route.streamRoutes(
                     }
 
                     is PartData.FileItem -> {
-                        if (part.name === "thumbnail") {
+                        if (part.name == PartDataItems.THUMBNAIL.displayName) {
                             // Process the thumbnail image file
                             thumbnailContent = part.streamProvider().readBytes()
                         }
@@ -106,28 +86,27 @@ fun Route.streamRoutes(
                 }
             }
 
-            if (createStreamRequest == null) {
+            if (streamMetaData == null) {
                 call.respond(HttpStatusCode.BadRequest, "Stream metadata is missing.")
                 return@post
             }
 
             // If there's an image, upload it and get the thumbnailId
             val thumbnailId: String? = thumbnailContent?.let {
-                userSchema.uploadImage(createStreamRequest!!.userId, it).toHexString()
+                userSchema.uploadImage(streamMetaData!!.userId, it).toHexString()
             }
 
-            val stream = StreamDataModel(
-                title = createStreamRequest!!.title,
-                description = createStreamRequest!!.description,
-                userId = createStreamRequest!!.userId,
-                startTime = createStreamRequest!!.startTime,
-                endTime = createStreamRequest!!.endTime,
-                isPublic = createStreamRequest!!.isPublic,
-                isTicketed = createStreamRequest!!.isTicketed,
-                categories = createStreamRequest!!.categories,
-                tags = createStreamRequest!!.tags,
-                createdAt = createStreamRequest!!.createdAt,
-                thumbnailId = createStreamRequest!!.thumbnailId
+            val timezone = TimeZone.of(streamMetaData!!.timezoneId)
+
+            val stream = StreamDto(
+                title = streamMetaData!!.title,
+                userId = streamMetaData!!.userId,
+                privacyType = streamMetaData!!.privacyType,
+                isTicketed = streamMetaData!!.isTicketed,
+                categories = streamMetaData!!.categories,
+                tags = streamMetaData!!.tags,
+                createdAt = Clock.System.now().toLocalDateTime(timezone),
+                thumbnailId = thumbnailId
             )
 
             val streamId = streamSchema.create(stream)
@@ -205,17 +184,15 @@ fun Route.streamRoutes(
 }
 
 // Extension function to convert Stream to StreamResponse DTO
-fun StreamDataModel.toStreamResponse(): StreamResponse {
+fun StreamDto.toStreamResponse(): StreamResponse {
     return StreamResponse(
         title = title,
-        description = description,
         userId = userId,
-        startTime = startTime,
-        endTime = endTime,
-        isPublic = isPublic,
+        privacyType = privacyType,
         isTicketed = isTicketed,
         categories = categories,
         tags = tags,
-        createdAt = createdAt
+        createdAt = createdAt,
+        thumbnailId = thumbnailId,
     )
 }
