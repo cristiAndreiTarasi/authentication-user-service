@@ -46,6 +46,7 @@ class StreamSchema(
             JOIN stream_tags t ON s.id = t.stream_id 
             WHERE t.tag = ?
         """
+        private const val SELECT_STREAMS_BY_USER_ID = "SELECT * FROM streams WHERE user_id = ?"
         private const val DELETE_STREAM = "DELETE FROM streams WHERE id = ?"
     }
 
@@ -94,6 +95,27 @@ class StreamSchema(
             return@dbQuery null
         }
     }
+
+    suspend fun findByUserId(userId: Int): List<StreamDto> = dbQuery { connection ->
+        val statement = connection.prepareStatement(SELECT_STREAMS_BY_USER_ID)
+        statement.setInt(1, userId)
+
+        val resultSet = statement.executeQuery()
+        val streams = mutableListOf<StreamDto>()
+
+        while (resultSet.next()) {
+            val stream = resultSet.toStreamDataModel()
+
+            // Fetch associated categories and tags
+            stream.categories = categorySchema.getCategoriesByStreamId(stream.id!!)
+            stream.tags = tagSchema.getTagsByStreamId(stream.id)
+
+            streams.add(stream)
+        }
+
+        return@dbQuery streams
+    }
+
 
     // Function to fetch all streams
     suspend fun findAll(): List<StreamDto> = dbQuery { connection ->

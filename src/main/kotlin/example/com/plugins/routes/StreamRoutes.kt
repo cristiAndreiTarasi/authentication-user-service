@@ -30,9 +30,16 @@ data class CreateStreamRequest(
     val privacyType: PrivacyOptions,
     val isTicketed: Boolean,
     val categories: List<CategoryDto>,
-    val tags: List<String>/* = emptyList()*/,
-    val timezoneId: String
+    val tags: List<String>,
+    val timezoneId: String,
+    val thumbnailId: String? = null
 )
+
+@Serializable
+data class CreateStreamResponse(val streamId: Int)
+
+@Serializable
+data class DeleteStreamResponse(val message: String)
 
 @Serializable
 data class StreamResponse(
@@ -105,12 +112,12 @@ fun Route.streamRoutes(
                 isTicketed = streamMetaData!!.isTicketed,
                 categories = streamMetaData!!.categories,
                 tags = streamMetaData!!.tags,
+                thumbnailId = thumbnailId,
                 createdAt = Clock.System.now().toLocalDateTime(timezone),
-                thumbnailId = thumbnailId
             )
 
             val streamId = streamSchema.create(stream)
-            call.respond(HttpStatusCode.Created, streamId)
+            call.respond(HttpStatusCode.Created, CreateStreamResponse(streamId = streamId))
         }
 
         // Route to get a specific stream by ID
@@ -160,24 +167,32 @@ fun Route.streamRoutes(
         }
 
         // Route to delete a stream
-        delete("/streams/{id}") {
-            val id = call.parameters["id"]?.toIntOrNull()
-            if (id == null) {
-                call.respond(HttpStatusCode.BadRequest, "Invalid stream ID")
+        delete("/streams/{streamId}") {
+            val streamId = call.parameters["streamId"]?.toIntOrNull()
+            if (streamId == null) {
+                call.respond(
+                    HttpStatusCode.BadRequest,
+                    DeleteStreamResponse("Invalid stream ID")
+                )
                 return@delete
             }
 
-            val stream = streamSchema.findById(id)
+            val stream = streamSchema.findById(streamId)
             if (stream?.thumbnailId != null) {
-                // Delete the thumbnail if exists
                 userSchema.deleteImage(ObjectId(stream.thumbnailId))
             }
 
-            val isDeleted = streamSchema.delete(id)
+            val isDeleted = streamSchema.delete(streamId)
             if (isDeleted) {
-                call.respond(HttpStatusCode.OK, "Stream deleted successfully")
+                call.respond(
+                    HttpStatusCode.OK,
+                    DeleteStreamResponse("Stream deleted successfully")
+                )
             } else {
-                call.respond(HttpStatusCode.InternalServerError, "Failed to delete stream")
+                call.respond(
+                    HttpStatusCode.InternalServerError,
+                    DeleteStreamResponse("Failed to delete stream")
+                )
             }
         }
     }
