@@ -1,6 +1,13 @@
 package example.com.plugins.routes
 
+import example.com.PartDataItems
 import example.com.PrivacyOptions
+import example.com.UserRole
+import example.com.plugins.routes.dtos.CreateStreamRequest
+import example.com.plugins.routes.dtos.CreateStreamResponse
+import example.com.plugins.routes.dtos.DeleteStreamResponse
+import example.com.plugins.routes.dtos.StreamResponse
+import example.com.plugins.routes.dtos.roles.authorize
 import example.com.schemas.CategoryDto
 import example.com.schemas.StreamDto
 import example.com.schemas.StreamSchema
@@ -23,101 +30,98 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import org.bson.types.ObjectId
 
-@Serializable
-data class CreateStreamRequest(
-    val title: String,
-    val userId: Int,
-    val privacyType: PrivacyOptions,
-    val isTicketed: Boolean,
-    val categories: List<CategoryDto>,
-    val tags: List<String>,
-    val timezoneId: String,
-    val thumbnailId: String? = null
-)
-
-@Serializable
-data class CreateStreamResponse(val streamId: Int)
-
-@Serializable
-data class DeleteStreamResponse(val message: String)
-
-@Serializable
-data class StreamResponse(
-    val title: String,
-    val userId: Int,
-    val privacyType: PrivacyOptions,
-    val isTicketed: Boolean,
-    val categories: List<CategoryDto>,
-    val tags: List<String>,
-    val createdAt: LocalDateTime,
-    val thumbnailId: String? = null
-)
-
-enum class PartDataItems(val displayName: String) {
-    METADATA("metadata"),
-    THUMBNAIL("thumbnail")
-}
-
 fun Route.streamRoutes(
     streamSchema: StreamSchema,
     userSchema: UserSchema
 ) {
-    authenticate("auth-jwt") {
-        // Route to start a new stream
-        post("/streams/start") {
-            val multipartData = call.receiveMultipart()
+    authorize {
+        authorize (UserRole.OWNER.roleName) {
+            // Route to start a new stream
+            post("/streams/start") {
+                val multipartData = call.receiveMultipart()
 
-            var streamMetaData: CreateStreamRequest? = null
-            var thumbnailContent: ByteArray? = null
+                var streamMetaData: CreateStreamRequest? = null
+                var thumbnailContent: ByteArray? = null
 
-            multipartData.forEachPart { part ->
-                when (part) {
-                    is PartData.FormItem -> {
-                        if (part.name == PartDataItems.METADATA.displayName) {
-                            // Deserialize the metadata from JSON string
-                            streamMetaData = Json.decodeFromString(
-                                CreateStreamRequest.serializer(),
-                                part.value
-                            )
+                multipartData.forEachPart { part ->
+                    when (part) {
+                        is PartData.FormItem -> {
+                            if (part.name == PartDataItems.METADATA.displayName) {
+                                // Deserialize the metadata from JSON string
+                                streamMetaData = Json.decodeFromString(
+                                    CreateStreamRequest.serializer(),
+                                    part.value
+                                )
+                            }
                         }
-                    }
 
-                    is PartData.FileItem -> {
-                        if (part.name == PartDataItems.THUMBNAIL.displayName) {
-                            // Process the thumbnail image file
-                            thumbnailContent = part.streamProvider().readBytes()
+                        is PartData.FileItem -> {
+                            if (part.name == PartDataItems.THUMBNAIL.displayName) {
+                                // Process the thumbnail image file
+                                thumbnailContent = part.streamProvider().readBytes()
+                            }
                         }
-                    }
 
-                    else -> part.dispose()
+                        else -> part.dispose()
+                    }
+                }
+
+                if (streamMetaData == null) {
+                    call.respond(HttpStatusCode.BadRequest, "Stream metadata is missing.")
+                    return@post
+                }
+
+                // If there's an image, upload it and get the thumbnailId
+                val thumbnailId: String? = thumbnailContent?.let {
+                    userSchema.uploadImage(streamMetaData!!.userId, it).toHexString()
+                }
+
+                val timezone = TimeZone.of(streamMetaData!!.timezoneId)
+
+                val stream = StreamDto(
+                    title = streamMetaData!!.title,
+                    userId = streamMetaData!!.userId,
+                    privacyType = streamMetaData!!.privacyType,
+                    isTicketed = streamMetaData!!.isTicketed,
+                    categories = streamMetaData!!.categories,
+                    tags = streamMetaData!!.tags,
+                    thumbnailId = thumbnailId,
+                    createdAt = Clock.System.now().toLocalDateTime(timezone),
+                )
+
+                val streamId = streamSchema.create(stream)
+                call.respond(HttpStatusCode.Created, CreateStreamResponse(streamId = streamId))
+            }
+
+            // Route to delete a stream
+            delete("/streams/delete/{streamId}") {
+                val streamId = call.parameters["streamId"]?.toIntOrNull()
+                if (streamId == null) {
+                    call.respond(
+                        HttpStatusCode.BadRequest,
+                        DeleteStreamResponse("Invalid stream ID")
+                    )
+                    return@delete
+                }
+
+                val stream = streamSchema.findById(streamId)
+                if (stream?.thumbnailId != null) {
+                    userSchema.deleteImage(ObjectId(stream.thumbnailId))
+                }
+
+                val isDeleted = streamSchema.delete(streamId)
+                if (isDeleted) {
+                    call.respond(
+                        HttpStatusCode.OK,
+                        DeleteStreamResponse("Stream deleted successfully")
+                    )
+                } else {
+                    call.respond(
+                        HttpStatusCode.InternalServerError,
+                        DeleteStreamResponse("Failed to delete stream")
+                    )
                 }
             }
-
-            if (streamMetaData == null) {
-                call.respond(HttpStatusCode.BadRequest, "Stream metadata is missing.")
-                return@post
-            }
-
-            // If there's an image, upload it and get the thumbnailId
-            val thumbnailId: String? = thumbnailContent?.let {
-                userSchema.uploadImage(streamMetaData!!.userId, it).toHexString()
-            }
-
-            val timezone = TimeZone.of(streamMetaData!!.timezoneId)
-
-            val stream = StreamDto(
-                title = streamMetaData!!.title,
-                userId = streamMetaData!!.userId,
-                privacyType = streamMetaData!!.privacyType,
-                isTicketed = streamMetaData!!.isTicketed,
-                categories = streamMetaData!!.categories,
-                tags = streamMetaData!!.tags,
-                thumbnailId = thumbnailId,
-                createdAt = Clock.System.now().toLocalDateTime(timezone),
-            )
-
-            val streamId = streamSchema.create(stream)
-            call.respond(HttpStatusCode.Created, CreateStreamResponse(streamId = streamId))
         }
 
         // Route to get a specific stream by ID
@@ -164,36 +168,6 @@ fun Route.streamRoutes(
 
             val streams = streamSchema.findByTag(tag)
             call.respond(HttpStatusCode.OK, streams.map { it.toStreamResponse() })
-        }
-
-        // Route to delete a stream
-        delete("/streams/{streamId}") {
-            val streamId = call.parameters["streamId"]?.toIntOrNull()
-            if (streamId == null) {
-                call.respond(
-                    HttpStatusCode.BadRequest,
-                    DeleteStreamResponse("Invalid stream ID")
-                )
-                return@delete
-            }
-
-            val stream = streamSchema.findById(streamId)
-            if (stream?.thumbnailId != null) {
-                userSchema.deleteImage(ObjectId(stream.thumbnailId))
-            }
-
-            val isDeleted = streamSchema.delete(streamId)
-            if (isDeleted) {
-                call.respond(
-                    HttpStatusCode.OK,
-                    DeleteStreamResponse("Stream deleted successfully")
-                )
-            } else {
-                call.respond(
-                    HttpStatusCode.InternalServerError,
-                    DeleteStreamResponse("Failed to delete stream")
-                )
-            }
         }
     }
 }

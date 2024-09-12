@@ -18,20 +18,18 @@ data class TokenConfig(
 )
 
 interface ITokenService {
-    // Generates a token with the given configuration and claims
-    fun generateAccessToken(vararg claims: TokenClaim): String
-
-    fun generateRefreshToken(): String
+    fun generateAccessToken(claims: List<TokenClaim>, timezone: String): String
+    fun generateRefreshToken(timezone: String): String
 }
 
 // Generates a JWT token using the provided configuration and claims
 class TokenService(private val tokenConfig: TokenConfig) : ITokenService {
-    override fun generateAccessToken(vararg claims: TokenClaim): String {
+    override fun generateAccessToken(claims: List<TokenClaim>, timezone: String): String {
         val date: Date = Date.from(
             LocalDateTime
                 .now()
                 .plus(tokenConfig.accessExpiresIn)
-                .atZone(ZoneId.systemDefault())
+                .atZone(ZoneId.of(timezone))
                 .toInstant())
 
         var token = JWT.create()
@@ -49,12 +47,12 @@ class TokenService(private val tokenConfig: TokenConfig) : ITokenService {
         return token.sign(Algorithm.HMAC256(tokenConfig.secret))
     }
 
-    override fun generateRefreshToken(): String {
+    override fun generateRefreshToken(timezone: String): String {
         val date: Date = Date.from(
             LocalDateTime
                 .now()
                 .plus(tokenConfig.refreshExpiresIn)
-                .atZone(ZoneId.systemDefault())
+                .atZone(ZoneId.of(timezone))
                 .toInstant())
 
         val token = JWT.create()

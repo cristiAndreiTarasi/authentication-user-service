@@ -26,6 +26,7 @@ data class ExposedUser(
     var password: String,
     val salt: String,
     val username: String,
+    val role: String,
     val passwordResetToken: String? = null,
     val passwordResetTokenExpiry: LocalDateTime? = null,
     val bio: String? = null,
@@ -34,7 +35,7 @@ data class ExposedUser(
     @Serializable(with = LocalDateSerializer::class) val birthDate: LocalDate? = null,
     @Serializable(with = ObjectIdSerializer::class) val imageId: ObjectId? = null,
     val createdAt: LocalDateTime,
-    val timezoneId: String
+    val timezoneId: String,
 )
 
 @Serializable
@@ -45,12 +46,20 @@ data class TallyDto(
 
 class UserSchema(private val dbConnection: Connection, private val mongoDatabase: MongoDatabase) {
     companion object {
-        private const val INSERT_USER = "INSERT INTO users (email, password, salt, username, bio, occupation, created_at, birth_date, timezone) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
+        private const val INSERT_USER = """
+            INSERT INTO users 
+            (email, password, salt, username, role, bio, occupation, created_at, birth_date, timezone) 
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """
         private const val SELECT_USER_BY_EMAIL = "SELECT * FROM users WHERE email = ?"
         private const val SELECT_USER_BY_USERNAME = "SELECT * FROM users WHERE username = ?"
         private const val SELECT_USER_BY_ID = "SELECT * FROM users WHERE id = ?"
         private const val SELECT_USER_BY_TOKEN = "SELECT * FROM users WHERE password_reset_token = ?"
-        private const val UPDATE_PASSWORD_RESET_TOKEN = "UPDATE users SET password_reset_token = ?, password_reset_token_expiry = ? WHERE id = ?"
+        private const val UPDATE_PASSWORD_RESET_TOKEN = """
+            UPDATE users 
+            SET password_reset_token = ?, password_reset_token_expiry = ? 
+            WHERE id = ?
+        """
         private const val UPDATE_USER_PASSWORD = "UPDATE users SET password = ? WHERE id = ?"
         private const val SELECT_ALL_USERS = "SELECT * FROM users"
         private const val DELETE_USER_BY_ID = "DELETE FROM users WHERE id = ?"
@@ -72,11 +81,12 @@ class UserSchema(private val dbConnection: Connection, private val mongoDatabase
         statement.setString(2, user.password)
         statement.setString(3, user.salt)
         statement.setString(4, user.username)
-        statement.setString(5, user.bio)
-        statement.setString(6, user.occupation)
-        statement.setTimestamp(7, Timestamp.valueOf(user.createdAt.toJavaLocalDateTime()))
-        statement.setDate(8, user.birthDate.let { Date.valueOf(it) })
-        statement.setString(9, user.timezoneId)
+        statement.setString(5, user.role)
+        statement.setString(6, user.bio)
+        statement.setString(7, user.occupation)
+        statement.setTimestamp(8, Timestamp.valueOf(user.createdAt.toJavaLocalDateTime()))
+        statement.setDate(9, user.birthDate.let { Date.valueOf(it) })
+        statement.setString(10, user.timezoneId)
 
         statement.executeUpdate()
         val generatedKeys = statement.generatedKeys
@@ -303,6 +313,7 @@ class UserSchema(private val dbConnection: Connection, private val mongoDatabase
             password = getString("password"),
             salt = getString("salt"),
             username = getString("username"),
+            role = getString("role"),
             bio = getString("bio"),
             occupation = getString("occupation"),
             passwordResetToken = getString("password_reset_token"),

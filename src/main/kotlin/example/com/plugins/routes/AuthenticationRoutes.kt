@@ -2,6 +2,19 @@ package example.com.plugins.routes
 
 import com.typesafe.config.Config
 import com.typesafe.config.ConfigFactory
+import example.com.UserRole
+import example.com.plugins.routes.dtos.AuthResponse
+import example.com.plugins.routes.dtos.ForgotPasswordRequest
+import example.com.plugins.routes.dtos.ForgotResponse
+import example.com.plugins.routes.dtos.RefreshTokenRequest
+import example.com.plugins.routes.dtos.RefreshTokenResponse
+import example.com.plugins.routes.dtos.ResetPasswordRequest
+import example.com.plugins.routes.dtos.ResetResponse
+import example.com.plugins.routes.dtos.SigninRequestDto
+import example.com.plugins.routes.dtos.SignoutRequest
+import example.com.plugins.routes.dtos.SignoutResponse
+import example.com.plugins.routes.dtos.SignupRequestDto
+import example.com.plugins.routes.dtos.roles.authorize
 import example.com.schemas.ExposedUser
 import example.com.schemas.Token
 import example.com.schemas.TokenSchema
@@ -28,44 +41,6 @@ import kotlinx.datetime.toLocalDateTime
 import kotlinx.serialization.Serializable
 import java.time.LocalDate
 import java.time.format.DateTimeFormatter
-
-@Serializable
-data class SignupRequestDto(
-    val email: String,
-    val password: String,
-    val birthDate: String,
-    val timezone: String
-)
-
-@Serializable
-data class SigninRequestDto(val email: String, val password: String)
-
-@Serializable
-data class ResetPasswordRequest(val token: String, val newPassword: String)
-
-@Serializable
-data class RefreshTokenRequest(val refreshToken: String)
-
-@Serializable
-data class ForgotPasswordRequest(val email: String)
-
-@Serializable
-data class RefreshTokenResponse(val newAccessToken: String, val newRefreshToken: String, val message: String)
-
-@Serializable
-data class ForgotResponse(val message: String)
-
-@Serializable
-data class ResetResponse(val message: String)
-
-@Serializable
-data class SignoutRequest(val userId: Int)
-
-@Serializable
-data class SignoutResponse(val message: String)
-
-@Serializable
-data class AuthResponseDto(val accessToken: String, val refreshToken: String)
 
 fun Route.authenticationRoutes(
     userSchema: UserSchema,
@@ -117,7 +92,8 @@ fun Route.authenticationRoutes(
             salt = saltedHash.salt,
             birthDate = LocalDate.parse(user.birthDate, DateTimeFormatter.ofPattern("d MMM yyyy")),
             createdAt = Clock.System.now().toLocalDateTime(timeZone),
-            username = username, // This should be taken from the user's device
+            username = username,
+            role = UserRole.OWNER.roleName,
             imageUrl = null,
             timezoneId = user.timezone
         )
@@ -177,12 +153,14 @@ fun Route.authenticationRoutes(
         }
 
         val existingRefreshToken = tokenSchema.findByUserId(userId)
+        val timeZone = TimeZone.of(user.timezoneId)
+        val tokenClaim = TokenClaim("userId", user.id.toString())
+        val roleClaim = TokenClaim("role", user.role)
 
         // Generate tokens
-        val accessToken = tokenService.generateAccessToken(TokenClaim("userId", user.id.toString()))
-        val refreshToken = tokenService.generateRefreshToken()
+        val accessToken = tokenService.generateAccessToken(listOf(tokenClaim, roleClaim), timeZone.id)
+        val refreshToken = tokenService.generateRefreshToken(timeZone.id)
 
-        val timeZone = TimeZone.of(user.timezoneId)
 
         // Store the refresh token
         val tokenModel = Token(
@@ -226,8 +204,12 @@ fun Route.authenticationRoutes(
 
         val timeZone = TimeZone.of(user.timezoneId)
 
-        val newAccessToken = tokenService.generateAccessToken(TokenClaim("userId", storedToken.userId.toString()))
-        val newRefreshToken = tokenService.generateRefreshToken()
+        val tokenClaim = TokenClaim("userId", user.id.toString())
+        val roleClaim = TokenClaim("role", user.role)
+
+        // Generate tokens
+        val newAccessToken = tokenService.generateAccessToken(listOf(tokenClaim, roleClaim), timeZone.id)
+        val newRefreshToken = tokenService.generateRefreshToken(timeZone.id)
 
         tokenSchema.deleteTokensForUser(storedToken.userId)
 
@@ -246,102 +228,102 @@ fun Route.authenticationRoutes(
         )
     }
 
-    authenticate("auth-jwt") {
-        post("/forgot-password") {
-            val request = call.receive<ForgotPasswordRequest>()
-            val user = userSchema.findByEmail(request.email)
-            val token = generateRandomString(32)
-            val expiryTime = Clock.System.now().plus(1, DateTimeUnit.HOUR, TimeZone.currentSystemDefault()).toLocalDateTime(TimeZone.currentSystemDefault())
+    post("/forgot-password") {
+        val request = call.receive<ForgotPasswordRequest>()
+        val user = userSchema.findByEmail(request.email)
+        val token = generateRandomString(32)
+        val expiryTime = Clock.System.now().plus(1, DateTimeUnit.HOUR, TimeZone.currentSystemDefault()).toLocalDateTime(TimeZone.currentSystemDefault())
 
-            if (user == null) {
-                call.respond(HttpStatusCode.Conflict, "User does not exist.")
-                return@post
-            }
+        if (user == null) {
+            call.respond(HttpStatusCode.Conflict, "User does not exist.")
+            return@post
+        }
 
-            userSchema.updatePasswordResetToken(user.id!!, token, expiryTime)
+        userSchema.updatePasswordResetToken(user.id!!, token, expiryTime)
 
-            val resetLink = "http://localhost:8081/reset?token=$token"
-            val emailBody = """
-                    <div style="background-color: #F6F6F6; display: block; max-width: 960px;">
-                        <div style="color: #ECECEC; background-color: #F6F6F6; padding: 20px; max-width: 960px; paddin: 100px;">
-                            <h1 style="color: #302E3E; font-family: Calibri; font-size: 46px; text-align: center;">BitFest</h1>
-                            <p style="max-width: 600px; padding: 0 100px 0 100px; font-family: Calibri; font-size: 20px; color: #302E3E">
-                                To reset your BitFest password, please click this link:
-                            </p>
-                            <a href="$resetLink" style="max-width: 600px; padding: 0 100px 0 100px; font-family: Calibri; font-size: 20px;">
-                                http://localhost:8080/reset?token=$token
-                            </a>
-                            <p style="color: #999999; max-width: 600px; padding: 0 100px 0 100px; font-family: Calibri; font-size: 20px; color: #302E3E"">
-                                Thanks,
-                                <br/>
-                                Bitfest Team
-                            </p>
-                        </div>
+        val resetLink = "http://localhost:8081/reset?token=$token"
+        val emailBody = """
+                <div style="background-color: #F6F6F6; display: block; max-width: 960px;">
+                    <div style="color: #ECECEC; background-color: #F6F6F6; padding: 20px; max-width: 960px; paddin: 100px;">
+                        <h1 style="color: #302E3E; font-family: Calibri; font-size: 46px; text-align: center;">BitFest</h1>
+                        <p style="max-width: 600px; padding: 0 100px 0 100px; font-family: Calibri; font-size: 20px; color: #302E3E">
+                            To reset your BitFest password, please click this link:
+                        </p>
+                        <a href="$resetLink" style="max-width: 600px; padding: 0 100px 0 100px; font-family: Calibri; font-size: 20px;">
+                            http://localhost:8080/reset?token=$token
+                        </a>
+                        <p style="color: #999999; max-width: 600px; padding: 0 100px 0 100px; font-family: Calibri; font-size: 20px; color: #302E3E"">
+                            Thanks,
+                            <br/>
+                            Bitfest Team
+                        </p>
                     </div>
-                """.trimIndent()
+                </div>
+            """.trimIndent()
 
-            // Accommodate the email sending to gmail or yahoo mail
-            val emailConfig = when {
-                request.email.endsWith("@gmail.com") -> loadEmailConfig("gmail")
-                request.email.endsWith("@yahoo.com") -> {
-                    call.respond(HttpStatusCode.Forbidden, "Sorry, at the moment yahoo mail is not supported.")
-                    loadEmailConfig("yahoo")
-                }
-                else -> throw IllegalArgumentException("Unsupported email provider")
+        // Accommodate the email sending to gmail or yahoo mail
+        val emailConfig = when {
+            request.email.endsWith("@gmail.com") -> loadEmailConfig("gmail")
+            request.email.endsWith("@yahoo.com") -> {
+                call.respond(HttpStatusCode.Forbidden, "Sorry, at the moment yahoo mail is not supported.")
+                loadEmailConfig("yahoo")
             }
-            val emailService = EmailService(emailConfig)
+            else -> throw IllegalArgumentException("Unsupported email provider")
+        }
+        val emailService = EmailService(emailConfig)
 
-            try {
-                emailService.sendEmail(user.email, "BitFest Password Reset", emailBody)
-                call.respond(
-                    HttpStatusCode.OK,
-                    ForgotResponse(
-                        message = "An email was sent to ${user.email} with instructions on how to reset your password."
-                    ),
+        try {
+            emailService.sendEmail(user.email, "BitFest Password Reset", emailBody)
+            call.respond(
+                HttpStatusCode.OK,
+                ForgotResponse(
+                    message = "An email was sent to ${user.email} with instructions on how to reset your password."
+                ),
+            )
+        } catch (e: Exception) {
+            call.respond(
+                HttpStatusCode.InternalServerError,
+                ForgotResponse(
+                    message = "Failed to send password reset email. $e"
                 )
-            } catch (e: Exception) {
-                call.respond(
-                    HttpStatusCode.InternalServerError,
-                    ForgotResponse(
-                        message = "Failed to send password reset email. $e"
-                    )
-                )
-            }
+            )
+        }
+    }
+
+    post("/reset-password") {
+        val request = call.receive<ResetPasswordRequest>()
+
+        // Verify if the token exists and has not expired and retrieve the user by the given token
+        val user = userSchema.findByToken(request.token)
+
+        if (user?.passwordResetTokenExpiry == null || !isTokenValid(user.passwordResetTokenExpiry)) {
+            call.respond(HttpStatusCode.BadRequest, "Invalid or expired token.")
+            return@post
         }
 
-        post("/reset-password") {
-            val request = call.receive<ResetPasswordRequest>()
+        val newSaltedHash = hashingService.generateSaltedHash(request.newPassword)
+        val updateResult = userSchema.updateUserPassword(user.id!!, newSaltedHash.hash)
 
-            // Verify if the token exists and has not expired and retrieve the user by the given token
-            val user = userSchema.findByToken(request.token)
+        tokenSchema.deleteTokensForUser(user.id)
 
-            if (user?.passwordResetTokenExpiry == null || !isTokenValid(user.passwordResetTokenExpiry)) {
-                call.respond(HttpStatusCode.BadRequest, "Invalid or expired token.")
-                return@post
-            }
-
-            val newSaltedHash = hashingService.generateSaltedHash(request.newPassword)
-            val updateResult = userSchema.updateUserPassword(user.id!!, newSaltedHash.hash)
-
-            tokenSchema.deleteTokensForUser(user.id)
-
-            if (updateResult) {
-                call.respond(
-                    HttpStatusCode.OK,
-                    ResetResponse(
-                        message = "Password reset successfully."
-                    )
+        if (updateResult) {
+            call.respond(
+                HttpStatusCode.OK,
+                ResetResponse(
+                    message = "Password reset successfully."
                 )
-            } else {
-                call.respond(
-                    HttpStatusCode.InternalServerError,
-                    ResetResponse(
-                        message = "Failed to reset the password."
-                    )
+            )
+        } else {
+            call.respond(
+                HttpStatusCode.InternalServerError,
+                ResetResponse(
+                    message = "Failed to reset the password."
                 )
-            }
+            )
         }
+    }
 
+    authorize {
         post("/signout") {
             val request = try {
                 call.receive<SignoutRequest>()
