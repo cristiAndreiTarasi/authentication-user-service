@@ -8,6 +8,12 @@ import io.ktor.server.auth.jwt.JWTPrincipal
 import io.ktor.server.auth.principal
 import io.ktor.server.response.respond
 import io.ktor.server.routing.Route
+import kotlinx.serialization.Serializable
+
+@Serializable
+data class ResponseDto(
+    val message: String,
+)
 
 /**
  * Enforces authentication and optionally restricts access to users with specific roles.
@@ -30,14 +36,25 @@ fun Route.authorize(vararg requiredRoles: String, block: Route.() -> Unit): Rout
     return authenticate("auth-jwt") {
         intercept(Plugins) {
             val principal = call.principal<JWTPrincipal>()
-            val role = principal?.getClaim("role", String::class)
+
+            if (principal == null) {
+                call.respond(
+                    HttpStatusCode.Unauthorized,
+                    ResponseDto("Authentication failed. No valid JWT token found.")
+                )
+                return@intercept finish()
+            }
+
+            val role = principal.payload.getClaim("role").asString()
+
+            println("User role: $role")
 
             // If no roles are provided, just authenticate without checking roles
             if (requiredRoles.isNotEmpty()) {
                 if (role == null || role !in requiredRoles) {
                     call.respond(
                         HttpStatusCode.Forbidden,
-                        "You do not have access to this resource."
+                        ResponseDto("You do not have access to this resource.")
                     )
 
                     return@intercept finish()

@@ -3,6 +3,7 @@ package example.com.plugins
 import com.auth0.jwt.JWT
 import com.auth0.jwt.algorithms.Algorithm
 import example.com.config.Constants
+import io.ktor.http.HttpStatusCode
 import io.ktor.server.application.*
 import io.ktor.server.auth.*
 import io.ktor.server.auth.jwt.*
@@ -19,7 +20,7 @@ fun Application.configureSecurity() {
     val jwtRealm = config.property("jwt.realm").getString()
     val jwtSecret = Constants.JWT_SECRET
 
-    authentication {
+    install(Authentication) {
         jwt("auth-jwt") {
             realm = jwtRealm
 
@@ -27,15 +28,22 @@ fun Application.configureSecurity() {
                 JWT
                     .require(Algorithm.HMAC256(jwtSecret))
                     .withAudience(jwtAudience)
-                    .withIssuer(jwtDomain)
+                    .withIssuer(jwtIssuer)
                     .build()
             )
+
             validate { credential ->
-                if (credential.payload.audience.contains(jwtAudience)) {
+                val role = credential.payload.getClaim("role").asString()
+
+                if (role != null && role in listOf("owner", "admin")) {
                     JWTPrincipal(credential.payload)
                 } else {
                     null
                 }
+            }
+
+            challenge { _, _ ->
+                call.respond(HttpStatusCode.Unauthorized, "Token is invalid or expired")
             }
         }
     }

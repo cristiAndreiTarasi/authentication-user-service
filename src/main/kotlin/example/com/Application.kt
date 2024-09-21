@@ -28,7 +28,7 @@ fun Application.module() {
     val tokenConfig = TokenConfig(
         issuer = environment.config.property("jwt.issuer").getString(),
         audience = environment.config.property("jwt.audience").getString(),
-        accessExpiresIn = Duration.ofMinutes(60), // one hour
+        accessExpiresIn = Duration.ofHours(1), // one hour
         refreshExpiresIn = Duration.ofDays(7), // one week
         secret = Constants.JWT_SECRET
     )

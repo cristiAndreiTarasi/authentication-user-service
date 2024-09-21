@@ -323,34 +323,34 @@ fun Route.authenticationRoutes(
         }
     }
 
-    authorize {
-        post("/signout") {
-            val request = try {
-                call.receive<SignoutRequest>()
-            } catch (e: Exception) {
-                call.respond(HttpStatusCode.BadRequest, SignoutResponse("Invalid request body"))
-                return@post
-            }
-
-            // Check if user ID is valid
-            val user = userSchema.findById(request.userId)
-            if (user == null) {
-                call.respond(HttpStatusCode.NotFound, SignoutResponse("User not found"))
-                return@post
-            }
-
-            // Delete the user's refresh tokens
-            try {
-                val deleteResult = tokenSchema.deleteTokensForUser(request.userId)
-                if (deleteResult) {
-                    call.respond(HttpStatusCode.OK, SignoutResponse("User signed out successfully"))
-                } else {
-                    call.respond(HttpStatusCode.InternalServerError, SignoutResponse("Failed to sign out user"))
-                }
-            } catch (e: Exception) {
-                call.respond(HttpStatusCode.InternalServerError, SignoutResponse("Failed to sign out user: ${e.message}"))
-            }
+    post("/signout") {
+        val request = try {
+            call.receive<SignoutRequest>()
+        } catch (e: Exception) {
+            call.respond(HttpStatusCode.BadRequest, SignoutResponse("Invalid request body"))
+            return@post
         }
+
+        // Check if user ID is valid
+        val user = userSchema.findById(request.userId)
+        if (user == null) {
+            call.respond(HttpStatusCode.NotFound, SignoutResponse("User not found"))
+            return@post
+        }
+
+        // Delete the user's refresh tokens
+        try {
+            val deleteResult = tokenSchema.deleteTokensForUser(request.userId)
+            if (deleteResult) {
+                call.respond(HttpStatusCode.OK, SignoutResponse("User signed out successfully"))
+            } else {
+                call.respond(HttpStatusCode.InternalServerError, SignoutResponse("Failed to sign out user"))
+            }
+        } catch (e: Exception) {
+            call.respond(HttpStatusCode.InternalServerError, SignoutResponse("Failed to sign out user: ${e.message}"))
+        }
+    }
+    authorize("owner") {
     }
 }
 

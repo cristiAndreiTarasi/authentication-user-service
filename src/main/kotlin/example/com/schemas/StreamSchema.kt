@@ -12,16 +12,19 @@ import java.sql.ResultSet
 import java.sql.SQLException
 import java.sql.Statement
 import java.sql.Timestamp
+import java.sql.Types
 
 @Serializable
 data class StreamDto(
     val id: Int? = null,
     val title: String,
+    val description: String? = null,
     val userId: Int,
     val privacyType: PrivacyOptions,
-    val isTicketed: Boolean,
+    val ticketPrice: Float,
     var categories: List<CategoryDto>,
     var tags: List<String>,
+    val startsAt: LocalDateTime? = null,
     val createdAt: LocalDateTime,
     val thumbnailId: String? = null
 )
@@ -34,8 +37,8 @@ class StreamSchema(
     companion object {
         private const val INSERT_STREAM = """
             INSERT INTO streams 
-            (title, user_id, privacy_type, is_ticketed, thumbnail_id, created_at) 
-            VALUES (?, ?, ?, ?, ?, ?)
+            (title, description, user_id, privacy_type, ticket_price, thumbnail_id, starts_at, created_at) 
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         """
         private const val SELECT_STREAM_BY_ID = "SELECT * FROM streams WHERE id = ?"
         private const val SELECT_ALL_STREAMS = "SELECT * FROM streams"
@@ -54,11 +57,17 @@ class StreamSchema(
         val statement = connection.prepareStatement(INSERT_STREAM, Statement.RETURN_GENERATED_KEYS)
 
         statement.setString(1, stream.title)
-        statement.setInt(2, stream.userId)
-        statement.setString(3, stream.privacyType.displayName)
-        statement.setBoolean(4, stream.isTicketed)
-        statement.setString(5, stream.thumbnailId)
-        statement.setTimestamp(6, Timestamp.valueOf(stream.createdAt.toJavaLocalDateTime()))
+        statement.setString(2, stream.description)
+        statement.setInt(3, stream.userId)
+        statement.setString(4, stream.privacyType.displayName)
+        statement.setFloat(5, stream.ticketPrice)
+        statement.setString(6, stream.thumbnailId)
+        if (stream.startsAt != null) {
+            statement.setTimestamp(7, Timestamp.valueOf(stream.startsAt.toJavaLocalDateTime()))
+        } else {
+            statement.setNull(7, Types.TIMESTAMP)
+        }
+        statement.setTimestamp(8, Timestamp.valueOf(stream.createdAt.toJavaLocalDateTime()))
 
         statement.executeUpdate()
 
@@ -178,11 +187,13 @@ class StreamSchema(
         return StreamDto(
             id = getInt("id"),
             title = getString("title"),
+            description = getString("description"),
             userId = getInt("user_id"),
             privacyType = PrivacyOptions.entries.first { it.displayName == getString("privacy_type") },
-            isTicketed = getBoolean("is_ticketed"),
+            ticketPrice = getFloat("ticket_price"),
             categories = emptyList(),  // Initially empty, will be filled in findById
             tags = emptyList(),        // Initially empty, will be filled in findById
+            startsAt = getTimestamp("starts_at")?.toLocalDateTime()?.toKotlinLocalDateTime(),
             createdAt = getTimestamp("created_at").toLocalDateTime().toKotlinLocalDateTime(),
             thumbnailId = getString("thumbnail_id")
         )

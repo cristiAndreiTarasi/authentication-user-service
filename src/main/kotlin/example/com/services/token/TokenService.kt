@@ -5,6 +5,7 @@ import com.auth0.jwt.algorithms.Algorithm
 import java.time.Duration
 import java.time.LocalDateTime
 import java.time.ZoneId
+import java.time.ZonedDateTime
 import java.util.Date
 
 data class TokenClaim(val name: String, val value: String, )
@@ -25,18 +26,16 @@ interface ITokenService {
 // Generates a JWT token using the provided configuration and claims
 class TokenService(private val tokenConfig: TokenConfig) : ITokenService {
     override fun generateAccessToken(claims: List<TokenClaim>, timezone: String): String {
-        val date: Date = Date.from(
-            LocalDateTime
-                .now()
-                .plus(tokenConfig.accessExpiresIn)
-                .atZone(ZoneId.of(timezone))
-                .toInstant())
+        val date = ZonedDateTime
+            .now(ZoneId.of(timezone))
+            .plus(tokenConfig.accessExpiresIn)
+            .toInstant()
 
         var token = JWT.create()
             .withAudience(tokenConfig.audience)
             .withIssuer(tokenConfig.issuer)
-            .withExpiresAt(date)
-            .withIssuedAt(Date(System.currentTimeMillis()))
+            .withExpiresAt(Date.from(date))
+            .withIssuedAt(Date.from(ZonedDateTime.now(ZoneId.of(timezone)).toInstant()))
 
         // Adds claims to the token
         claims.forEach { claim ->
@@ -48,12 +47,10 @@ class TokenService(private val tokenConfig: TokenConfig) : ITokenService {
     }
 
     override fun generateRefreshToken(timezone: String): String {
-        val date: Date = Date.from(
-            LocalDateTime
-                .now()
-                .plus(tokenConfig.refreshExpiresIn)
-                .atZone(ZoneId.of(timezone))
-                .toInstant())
+        val date = ZonedDateTime
+            .now(ZoneId.of(timezone))
+            .plus(tokenConfig.refreshExpiresIn)
+            .toInstant()
 
         val token = JWT.create()
             .withAudience(tokenConfig.audience)
