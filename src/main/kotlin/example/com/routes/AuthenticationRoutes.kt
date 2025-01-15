@@ -1,20 +1,20 @@
-package example.com.plugins.routes
+package example.com.routes
 
 import com.typesafe.config.Config
 import com.typesafe.config.ConfigFactory
 import example.com.UserRole
-import example.com.plugins.routes.dtos.AuthResponse
-import example.com.plugins.routes.dtos.ForgotPasswordRequest
-import example.com.plugins.routes.dtos.ForgotResponse
-import example.com.plugins.routes.dtos.RefreshTokenRequest
-import example.com.plugins.routes.dtos.RefreshTokenResponse
-import example.com.plugins.routes.dtos.ResetPasswordRequest
-import example.com.plugins.routes.dtos.ResetResponse
-import example.com.plugins.routes.dtos.SigninRequestDto
-import example.com.plugins.routes.dtos.SignoutRequest
-import example.com.plugins.routes.dtos.SignoutResponse
-import example.com.plugins.routes.dtos.SignupRequestDto
-import example.com.plugins.routes.dtos.roles.authorize
+import example.com.routes.dtos.AuthResponse
+import example.com.routes.dtos.ForgotPasswordRequest
+import example.com.routes.dtos.ForgotResponse
+import example.com.routes.dtos.RefreshTokenRequest
+import example.com.routes.dtos.RefreshTokenResponse
+import example.com.routes.dtos.ResetPasswordRequest
+import example.com.routes.dtos.ResetResponse
+import example.com.routes.dtos.SigninRequestDto
+import example.com.routes.dtos.SignoutRequest
+import example.com.routes.dtos.SignoutResponse
+import example.com.routes.dtos.SignupRequestDto
+import example.com.routes.dtos.roles.authorize
 import example.com.schemas.ExposedUser
 import example.com.schemas.Token
 import example.com.schemas.TokenSchema
@@ -28,6 +28,8 @@ import example.com.services.token.TokenService
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.application.call
 import io.ktor.server.auth.authenticate
+import io.ktor.server.auth.jwt.JWTPrincipal
+import io.ktor.server.auth.principal
 import io.ktor.server.request.receive
 import io.ktor.server.response.respond
 import io.ktor.server.routing.Route
@@ -95,7 +97,8 @@ fun Route.authenticationRoutes(
             username = username,
             role = UserRole.OWNER.roleName,
             imageUrl = null,
-            timezoneId = user.timezone
+            timezoneId = user.timezone,
+            isLive = false
         )
 
         // Save the user to the database
@@ -323,34 +326,48 @@ fun Route.authenticationRoutes(
         }
     }
 
-    post("/signout") {
-        val request = try {
-            call.receive<SignoutRequest>()
-        } catch (e: Exception) {
-            call.respond(HttpStatusCode.BadRequest, SignoutResponse("Invalid request body"))
-            return@post
-        }
+    authenticate("auth-jwt") {
+        post("/signout") {
+            val principal = call.principal<JWTPrincipal>()
+            val role = principal?.payload?.getClaim("role")?.asString()
 
-        // Check if user ID is valid
-        val user = userSchema.findById(request.userId)
-        if (user == null) {
-            call.respond(HttpStatusCode.NotFound, SignoutResponse("User not found"))
-            return@post
-        }
+            if (role == UserRole.OWNER.roleName) {
+                val request = try {
+                    call.receive<SignoutRequest>()
+                } catch (e: Exception) {
+                    call.respond(HttpStatusCode.BadRequest, SignoutResponse("Invalid request body"))
+                    return@post
+                }
 
-        // Delete the user's refresh tokens
-        try {
-            val deleteResult = tokenSchema.deleteTokensForUser(request.userId)
-            if (deleteResult) {
-                call.respond(HttpStatusCode.OK, SignoutResponse("User signed out successfully"))
-            } else {
-                call.respond(HttpStatusCode.InternalServerError, SignoutResponse("Failed to sign out user"))
+                // Check if user ID is valid
+                val user = userSchema.findById(request.userId)
+                if (user == null) {
+                    call.respond(HttpStatusCode.NotFound, SignoutResponse("User not found"))
+                    return@post
+                }
+
+                // Delete the user's refresh tokens
+                try {
+                    val deleteResult = tokenSchema.deleteTokensForUser(request.userId)
+                    if (deleteResult) {
+                        call.respond(
+                            HttpStatusCode.OK,
+                            SignoutResponse("User signed out successfully")
+                        )
+                    } else {
+                        call.respond(
+                            HttpStatusCode.InternalServerError,
+                            SignoutResponse("Failed to sign out user")
+                        )
+                    }
+                } catch (e: Exception) {
+                    call.respond(
+                        HttpStatusCode.InternalServerError,
+                        SignoutResponse("Failed to sign out user: ${e.message}")
+                    )
+                }
             }
-        } catch (e: Exception) {
-            call.respond(HttpStatusCode.InternalServerError, SignoutResponse("Failed to sign out user: ${e.message}"))
         }
-    }
-    authorize("owner") {
     }
 }
 

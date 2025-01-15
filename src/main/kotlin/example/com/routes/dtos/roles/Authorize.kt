@@ -1,4 +1,4 @@
-package example.com.plugins.routes.dtos.roles
+package example.com.routes.dtos.roles
 
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.application.ApplicationCallPipeline.ApplicationPhase.Plugins

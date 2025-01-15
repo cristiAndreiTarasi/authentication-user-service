@@ -21,6 +21,7 @@ data class TokenConfig(
 interface ITokenService {
     fun generateAccessToken(claims: List<TokenClaim>, timezone: String): String
     fun generateRefreshToken(timezone: String): String
+    fun getClaimFromToken(token: String, claimName: String): String?
 }
 
 // Generates a JWT token using the provided configuration and claims
@@ -60,5 +61,21 @@ class TokenService(private val tokenConfig: TokenConfig) : ITokenService {
 
         // Signs the token using the HMAC256 algorithm and the provided secret
         return token.sign(Algorithm.HMAC256(tokenConfig.secret))
+    }
+
+    override fun getClaimFromToken(token: String, claimName: String): String? {
+        return try {
+            // Decodes the token and retrieves the claim
+            val decodedJWT = JWT.require(Algorithm.HMAC256(tokenConfig.secret))
+                .withAudience(tokenConfig.audience)
+                .withIssuer(tokenConfig.issuer)
+                .build()
+                .verify(token)
+
+            // Returns the value of the requested claim
+            decodedJWT.getClaim(claimName)?.asString()
+        } catch (e: Exception) {
+            null // Returns null if the token is invalid or the claim is not present
+        }
     }
 }

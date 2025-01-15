@@ -57,18 +57,6 @@ class CommentSchema(private val dbConnection: Connection) {
         }
     }
 
-    suspend fun findCommentsByStreamId(streamId: Int): List<CommentDataModel> = dbQuery { connection ->
-        val statement = connection.prepareStatement(SELECT_COMMENTS_BY_STREAM_ID)
-        statement.setInt(1, streamId)
-        val resultSet = statement.executeQuery()
-
-        val comments = mutableListOf<CommentDataModel>()
-        while (resultSet.next()) {
-            comments.add(resultSet.toCommentDataModel())
-        }
-        return@dbQuery comments
-    }
-
     suspend fun deleteComment(commentId: Int): Boolean = dbQuery { connection ->
         val statement = connection.prepareStatement(DELETE_COMMENT)
         statement.setInt(1, commentId)

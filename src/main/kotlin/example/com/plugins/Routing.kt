@@ -1,11 +1,13 @@
 package example.com.plugins
 
-import example.com.plugins.routes.authenticationRoutes
-import example.com.plugins.routes.streamRoutes
-import example.com.plugins.routes.userRoutes
+import example.com.routes.authenticationRoutes
+import example.com.routes.srsHttpHookRoutes
+import example.com.routes.streamRoutes
+import example.com.routes.userRoutes
 import example.com.schemas.StreamSchema
 import example.com.schemas.TokenSchema
 import example.com.schemas.UserSchema
+import example.com.services.gridfs.GridFSService
 import example.com.services.hashing.HashingService
 import example.com.services.token.TokenService
 import io.ktor.server.application.Application
@@ -19,10 +21,12 @@ fun Application.configureRouting(
     hashingService: HashingService,
     tokenService: TokenService,
     postgresConnection: Connection,
+    gridFSService: GridFSService
 ) {
     routing {
         authenticationRoutes(userSchema, tokenSchema, hashingService, tokenService)
-        userRoutes(userSchema, tokenSchema, postgresConnection)
-        streamRoutes(streamSchema, userSchema)
+        userRoutes(userSchema, tokenSchema, postgresConnection, gridFSService)
+        streamRoutes(streamSchema, gridFSService, userSchema)
+        srsHttpHookRoutes(userSchema, tokenService)
     }
 }

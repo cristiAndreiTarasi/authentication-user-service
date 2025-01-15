@@ -1,4 +1,4 @@
-package example.com.plugins.routes.dtos
+package example.com.routes.dtos
 
 import example.com.PrivacyOptions
 import example.com.schemas.CategoryDto
@@ -22,11 +22,15 @@ data class CreateStreamRequest(
 @Serializable
 data class CreateStreamResponse(
     val streamId: Int? = null,
-    val message: String? = null
+    val message: String? = null,
+    val isLive: Boolean? = null
 )
 
 @Serializable
-data class DeleteStreamResponse(val message: String)
+data class DeleteStreamResponse(
+    val message: String,
+    val isLive: Boolean? = null
+)
 
 @Serializable
 data class StreamResponse(
@@ -38,5 +42,6 @@ data class StreamResponse(
     val categories: List<CategoryDto>,
     val tags: List<String>,
     val createdAt: LocalDateTime,
-    val thumbnailId: String? = null
+    val thumbnailId: String? = null,
+    var thumbnailBytes: List<Byte>? = null
 )

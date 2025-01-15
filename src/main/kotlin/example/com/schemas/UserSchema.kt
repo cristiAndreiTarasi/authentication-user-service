@@ -5,6 +5,7 @@ import com.mongodb.client.gridfs.GridFSBuckets
 import com.mongodb.client.gridfs.model.GridFSUploadOptions
 import example.com.config.LocalDateSerializer
 import example.com.config.ObjectIdSerializer
+import example.com.services.gridfs.GridFSService
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.datetime.LocalDateTime
@@ -36,6 +37,7 @@ data class ExposedUser(
     @Serializable(with = ObjectIdSerializer::class) val imageId: ObjectId? = null,
     val createdAt: LocalDateTime,
     val timezoneId: String,
+    val isLive: Boolean
 )
 
 @Serializable
@@ -44,12 +46,15 @@ data class TallyDto(
     val userIds: List<Int>
 )
 
-class UserSchema(private val dbConnection: Connection, private val mongoDatabase: MongoDatabase) {
+class UserSchema(
+    private val dbConnection: Connection,
+    private val gridFSService: GridFSService
+) {
     companion object {
         private const val INSERT_USER = """
             INSERT INTO users 
-            (email, password, salt, username, role, bio, occupation, created_at, birth_date, timezone) 
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            (email, password, salt, username, role, bio, occupation, created_at, birth_date, timezone, is_live) 
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """
         private const val SELECT_USER_BY_EMAIL = "SELECT * FROM users WHERE email = ?"
         private const val SELECT_USER_BY_USERNAME = "SELECT * FROM users WHERE username = ?"
@@ -65,10 +70,11 @@ class UserSchema(private val dbConnection: Connection, private val mongoDatabase
         private const val DELETE_USER_BY_ID = "DELETE FROM users WHERE id = ?"
         private const val UPDATE_USER_BIO = "UPDATE users SET bio = ? WHERE id = ?"
         private const val UPDATE_USER_OCCUPATION = "UPDATE users SET occupation = ? WHERE id = ?"
+        private const val UPDATE_USER_ISSTREAMING = "UPDATE users SET is_live = ? WHERE id = ?"
         private const val UPDATE_USER_NAME = "UPDATE users SET username = ? WHERE id = ?"
         private const val UPDATE_USER_AVATAR = "UPDATE users SET image_url = ? WHERE id = ?"
         private const val UPDATE_USER_IMAGE_ID = "UPDATE users SET image_id = ? WHERE id = ?"
-        private const val SELECT_IMAGE_ID = "SELECT image_id FROM users WHERE id = ?"
+
         private const val SELECT_USER_LIKES = "SELECT liker_id FROM likes WHERE user_id = ?"
         private const val SELECT_USER_FOLLOWERS = "SELECT follower_id FROM followers WHERE followed_id = ?"
         private const val SELECT_USER_FOLLOWING = "SELECT followed_id FROM followers WHERE follower_id = ?"
@@ -87,6 +93,7 @@ class UserSchema(private val dbConnection: Connection, private val mongoDatabase
         statement.setTimestamp(8, Timestamp.valueOf(user.createdAt.toJavaLocalDateTime()))
         statement.setDate(9, user.birthDate.let { Date.valueOf(it) })
         statement.setString(10, user.timezoneId)
+        statement.setBoolean(11, user.isLive)
 
         statement.executeUpdate()
         val generatedKeys = statement.generatedKeys
@@ -193,64 +200,18 @@ class UserSchema(private val dbConnection: Connection, private val mongoDatabase
         statement.executeUpdate()
     }
 
-    private val gridFSBuckets = GridFSBuckets.create(mongoDatabase, "images")
-
-    suspend fun uploadImage(userId: Int, imageData: ByteArray): ObjectId = withContext(Dispatchers.IO) {
-        val previousImage = getImageIdByUserId(userId)?.let { ObjectId(it) }
-        previousImage?.let { deleteImage(it) }
-
-        val options = GridFSUploadOptions().chunkSizeBytes(255 * 1024) // 255KB
-        val streamToUploadFrom: InputStream = ByteArrayInputStream(imageData)
-        val fileId = gridFSBuckets.uploadFromStream("image", streamToUploadFrom, options)
-        val imagesCollection = mongoDatabase.getCollection("images")
-        val imageDocument = Document("userId", userId).append("imageId", fileId)
-        imagesCollection.insertOne(imageDocument)
-
-        fileId
-    }
-
-    suspend fun deleteImage(imageId: ObjectId): Boolean = withContext(Dispatchers.IO) {
-        val imagesCollection = mongoDatabase.getCollection("images")
-        val gridFSBucket = GridFSBuckets.create(mongoDatabase, "images")
-
-        // Delete from metadata collection
-        val deleteMetadataResult = imagesCollection.deleteOne(Document("imageId", imageId))
-
-        // Delete from GridFS
-        val deleteGridFSResult = try {
-            gridFSBucket.delete(imageId)
-            true
-        } catch (e: Exception) {
-            false
-        }
-
-        // Return true if both deletions were successful
-        deleteMetadataResult.deletedCount > 0 && deleteGridFSResult
-    }
-
-    suspend fun getImageIdByUserId(userId: Int): String? = dbQuery { connection ->
-        val statement = connection.prepareStatement(SELECT_IMAGE_ID)
-        statement.setInt(1, userId)
-        val resultSet = statement.executeQuery()
-        if (resultSet.next()) {
-            resultSet.getString("image_id")
-        } else {
-            null
-        }
-    }
-
-
-    suspend fun fetchImage(imageId: ObjectId): ByteArray = withContext(Dispatchers.IO) {
-        val streamToDownloadTo = ByteArrayOutputStream()
-        gridFSBuckets.downloadToStream(imageId, streamToDownloadTo)
-        streamToDownloadTo.toByteArray()
-    }
-
     suspend fun updateUserImageId(userId: Int, imageId: String): Boolean = dbQuery { connection ->
         val statement = connection.prepareStatement(UPDATE_USER_IMAGE_ID)
         statement.setString(1, imageId)
         statement.setInt(2, userId)
         statement.executeUpdate() > 0
+    }
+
+    suspend fun updateIsStreaming(id: Int, isLive: Boolean) = dbQuery { connection ->
+        val statement = connection.prepareStatement(UPDATE_USER_ISSTREAMING)
+        statement.setBoolean(1, isLive)
+        statement.setInt(2, id)
+        statement.executeUpdate()
     }
 
     suspend fun deleteUser(id: Int): Boolean = dbQuery { connection ->
@@ -259,10 +220,10 @@ class UserSchema(private val dbConnection: Connection, private val mongoDatabase
         val userDeleted = statement.executeUpdate() > 0
 
         if (userDeleted) {
-            val imageIdStr = getImageIdByUserId(id)
+            val imageIdStr = gridFSService.getImageIdByUserId(id)
             val imageId = imageIdStr?.let { ObjectId(it) }
             if (imageId != null) {
-                deleteImage(imageId)
+                gridFSService.deleteImage(imageId)
             }
         }
 
@@ -322,7 +283,8 @@ class UserSchema(private val dbConnection: Connection, private val mongoDatabase
             imageId = getString("image_id")?.let { ObjectId(it) },
             birthDate = getDate("birth_date").toLocalDate(),
             createdAt = getTimestamp("created_at").toLocalDateTime().toKotlinLocalDateTime(),
-            timezoneId = getString("timezone")
+            timezoneId = getString("timezone"),
+            isLive = getBoolean("is_live")
         )
     }
 

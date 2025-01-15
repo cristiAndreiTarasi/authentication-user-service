@@ -14,7 +14,7 @@ RUN gradle buildFatJar --no-daemon
 FROM openjdk:19-jdk-slim
 
 # Expose port 8081 on the container
-EXPOSE 8081:8081
+EXPOSE 8082
 
 # Install psql client
 RUN apt-get update && apt-get install -y postgresql-client && rm -rf /var/lib/apt/lists/*

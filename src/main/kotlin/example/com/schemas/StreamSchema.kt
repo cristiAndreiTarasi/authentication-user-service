@@ -1,18 +1,21 @@
 package example.com.schemas
 
 import example.com.PrivacyOptions
+import example.com.services.gridfs.GridFSService
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.datetime.LocalDateTime
 import kotlinx.datetime.toJavaLocalDateTime
 import kotlinx.datetime.toKotlinLocalDateTime
 import kotlinx.serialization.Serializable
+import org.bson.types.ObjectId
 import java.sql.Connection
 import java.sql.ResultSet
 import java.sql.SQLException
 import java.sql.Statement
 import java.sql.Timestamp
 import java.sql.Types
+import java.util.Base64
 
 @Serializable
 data class StreamDto(
@@ -26,13 +29,15 @@ data class StreamDto(
     var tags: List<String>,
     val startsAt: LocalDateTime? = null,
     val createdAt: LocalDateTime,
-    val thumbnailId: String? = null
+    val thumbnailId: String? = null,
+    var thumbnailBytes: List<Byte>? = null
 )
 
 class StreamSchema(
     private val dbConnection: Connection,
     private val categorySchema: CategorySchema,
-    private val tagSchema: TagSchema
+    private val tagSchema: TagSchema,
+    private val gridFSService: GridFSService
 ) {
     companion object {
         private const val INSERT_STREAM = """
@@ -41,13 +46,16 @@ class StreamSchema(
             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         """
         private const val SELECT_STREAM_BY_ID = "SELECT * FROM streams WHERE id = ?"
-        private const val SELECT_ALL_STREAMS = "SELECT * FROM streams"
-        private const val SELECT_STREAMS_BY_CATEGORY = "SELECT * FROM streams WHERE category_id = ?"
-        private const val SELECT_STREAMS_BY_TAG = """
-            SELECT s.* 
-            FROM streams s 
-            JOIN stream_tags t ON s.id = t.stream_id 
-            WHERE t.tag = ?
+        private const val SELECT_ALL_STREAMS_PAGINATED = """
+            SELECT * FROM streams ORDER BY created_at DESC LIMIT ? OFFSET ?
+        """
+        private const val SELECT_STREAMS_BY_CATEGORY_PAGINATED = """
+            SELECT * FROM streams WHERE category_id = ? ORDER by created_at DESC LIMIT ? OFFSET ?
+        """
+        private const val SELECT_STREAMS_BY_TAG_PAGINATED = """
+            SELECT s.* FROM STREAMS s
+            JOIN streams_tags t ON s.id = t.stream_id
+            WHERE t.tag = ? ORDER BY s.created_at DESC LIMIT ? OFFSET ?
         """
         private const val SELECT_STREAMS_BY_USER_ID = "SELECT * FROM streams WHERE user_id = ?"
         private const val DELETE_STREAM = "DELETE FROM streams WHERE id = ?"
@@ -84,7 +92,6 @@ class StreamSchema(
             throw Exception("Unable to retrieve the id of the newly inserted stream")
         }
     }
-
 
     // Function to fetch a stream by ID
     suspend fun findById(streamId: Int): StreamDto? = dbQuery { connection ->
@@ -125,24 +132,43 @@ class StreamSchema(
         return@dbQuery streams
     }
 
-
     // Function to fetch all streams
-    suspend fun findAll(): List<StreamDto> = dbQuery { connection ->
-        val statement = connection.prepareStatement(SELECT_ALL_STREAMS)
-        val resultSet = statement.executeQuery()
+    suspend fun fetchStreamsPage(page: Int, pageSize: Int): List<StreamDto> = dbQuery { connection ->
+        val statement = connection.prepareStatement(SELECT_ALL_STREAMS_PAGINATED)
+        statement.setInt(1, pageSize)
+        statement.setInt(2, (page - 1) * pageSize)
 
+        val resultSet = statement.executeQuery()
         val streams = mutableListOf<StreamDto>()
 
         while (resultSet.next()) {
-            streams.add(resultSet.toStreamDataModel())
+            val stream = resultSet.toStreamDataModel()
+
+            // Fetch associated categories and tags
+            stream.categories = categorySchema.getCategoriesByStreamId(stream.id!!)
+            stream.tags = tagSchema.getTagsByStreamId(stream.id)
+
+            // Fetch and encode thumbnail data
+            stream.thumbnailBytes = stream.thumbnailId?.let { thumbnailId ->
+                val thumbnailBytes = gridFSService.fetchImage(ObjectId(thumbnailId))
+                thumbnailBytes.let { bytes ->
+                    if (bytes.isNotEmpty()) bytes.toList()
+                    else null
+                }
+            }
+
+            streams.add(stream)
         }
+
         return@dbQuery streams
     }
 
     // Function to fetch streams filtered by category
-    suspend fun findByCategory(categoryId: Int): List<StreamDto> = dbQuery { connection ->
-        val statement = connection.prepareStatement(SELECT_STREAMS_BY_CATEGORY)
+    suspend fun fetchStreamsByCategory(categoryId: Int, page: Int, pageSize: Int): List<StreamDto> = dbQuery { connection ->
+        val statement = connection.prepareStatement(SELECT_STREAMS_BY_CATEGORY_PAGINATED)
         statement.setInt(1, categoryId)
+        statement.setInt(2, pageSize)
+        statement.setInt(3, (page - 1) * pageSize)
 
         val resultSet = statement.executeQuery()
         val streams = mutableListOf<StreamDto>()
@@ -154,9 +180,11 @@ class StreamSchema(
     }
 
     // Function to fetch streams filtered by tag
-    suspend fun findByTag(tag: String): List<StreamDto> = dbQuery { connection ->
-        val statement = connection.prepareStatement(SELECT_STREAMS_BY_TAG)
+    suspend fun fetchStreamsByTag(tag: String, page: Int, pageSize: Int): List<StreamDto> = dbQuery { connection ->
+        val statement = connection.prepareStatement(SELECT_STREAMS_BY_TAG_PAGINATED)
         statement.setString(1, tag)
+        statement.setInt(2, pageSize)
+        statement.setInt(3, (page - 1) * pageSize)
 
         val resultSet = statement.executeQuery()
         val streams = mutableListOf<StreamDto>()

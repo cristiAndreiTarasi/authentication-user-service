@@ -1,4 +1,4 @@
-package example.com.plugins.routes.dtos
+package example.com.routes.dtos
 
 import example.com.schemas.ExposedUser
 import kotlinx.serialization.Serializable
@@ -13,11 +13,6 @@ data class AuthResponse(
 
 @Serializable
 data class UploadImageResponse(val message: String, val imageId: String)
-
-@Serializable
-data class FetchImageResponse(
-    val imageData: ByteArray
-)
 
 @Serializable
 data class ProfileFieldUpdateResponse(

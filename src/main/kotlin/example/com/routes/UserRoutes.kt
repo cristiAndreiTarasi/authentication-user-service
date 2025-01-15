@@ -1,15 +1,16 @@
-package example.com.plugins.routes
+package example.com.routes
 
 import example.com.UserRole
-import example.com.plugins.routes.dtos.ProfileFieldUpdateResponse
-import example.com.plugins.routes.dtos.UpdateBioDto
-import example.com.plugins.routes.dtos.UpdateOccupationDto
-import example.com.plugins.routes.dtos.UpdateUsernameDto
-import example.com.plugins.routes.dtos.UploadImageResponse
-import example.com.plugins.routes.dtos.roles.authorize
+import example.com.routes.dtos.ProfileFieldUpdateResponse
+import example.com.routes.dtos.UpdateBioDto
+import example.com.routes.dtos.UpdateOccupationDto
+import example.com.routes.dtos.UpdateUsernameDto
+import example.com.routes.dtos.UploadImageResponse
+import example.com.routes.dtos.roles.authorize
 import example.com.schemas.ExposedUser
 import example.com.schemas.TokenSchema
 import example.com.schemas.UserSchema
+import example.com.services.gridfs.GridFSService
 import io.ktor.http.ContentType
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.content.PartData
@@ -35,8 +36,9 @@ fun Route.userRoutes(
     userSchema: UserSchema,
     tokenSchema: TokenSchema,
     postgresConnection: Connection,
+    gridFSService: GridFSService
 ) {
-    authorize {
+    authenticate("auth-jwt") {
         get("/users") {
             val users = userSchema.getAllUsers()
             if (users.isNotEmpty()) {
@@ -62,7 +64,7 @@ fun Route.userRoutes(
                 ?: return@get call.respond(HttpStatusCode.BadRequest, "User ID is missing")
 
             // Fetch the image ID associated with the user ID from the database
-            val imageIdString = userSchema.getImageIdByUserId(userId)
+            val imageIdString = gridFSService.getImageIdByUserId(userId)
                 ?: return@get call.respond(HttpStatusCode.NotFound, "Image not found for user")
 
             val imageId = try {
@@ -71,7 +73,7 @@ fun Route.userRoutes(
                 return@get call.respond(HttpStatusCode.BadRequest, "Invalid Image ID")
             }
 
-            val imageBytes = userSchema.fetchImage(imageId)
+            val imageBytes = gridFSService.fetchImage(imageId)
             if (imageBytes.isNotEmpty()) {
                 call.respondBytes(imageBytes, ContentType.Image.JPEG)
             } else {
@@ -102,9 +104,7 @@ fun Route.userRoutes(
             val following = userSchema.getUserFollowing(userId)
             call.respond(HttpStatusCode.OK, following)
         }
-    }
 
-    authorize (UserRole.OWNER.roleName) {
         delete("/delete-user/{userId}") {
             val userId = call.parameters["userId"]?.toIntOrNull()
             if (userId == null) {
@@ -118,7 +118,7 @@ fun Route.userRoutes(
                 return@delete
             }
 
-            val imageIdString = userSchema.getImageIdByUserId(userId)
+            val imageIdString = gridFSService.getImageIdByUserId(userId)
             val imageId = imageIdString?.let { ObjectId(it) }
 
             try {
@@ -141,7 +141,7 @@ fun Route.userRoutes(
                     return@delete
                 }
 
-                imageId?.let { userSchema.deleteImage(it) }
+                imageId?.let { gridFSService.deleteImage(it) }
 
                 postgresConnection.commit()
                 call.respond(HttpStatusCode.OK, "User deleted successfully")
@@ -155,12 +155,7 @@ fun Route.userRoutes(
                 postgresConnection.autoCommit = true
             }
         }
-    }
 
-    authorize (
-        UserRole.OWNER.roleName,
-        UserRole.ADMIN.roleName
-    ) {
         put("/users/update/{userId}/bio") {
             val id = call.parameters["userId"]?.toIntOrNull()
 
@@ -252,7 +247,7 @@ fun Route.userRoutes(
 
             fileContent?.let {
                 try {
-                    val imageId = userSchema.uploadImage(userId, it)
+                    val imageId = gridFSService.uploadImage(userId, it)
                     val updateSuccess =
                         userSchema.updateUserImageId(userId, imageId.toHexString())
                     if (updateSuccess) {

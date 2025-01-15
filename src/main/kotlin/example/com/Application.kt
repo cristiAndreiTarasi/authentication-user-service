@@ -8,6 +8,7 @@ import example.com.schemas.StreamSchema
 import example.com.schemas.TagSchema
 import example.com.schemas.TokenSchema
 import example.com.schemas.UserSchema
+import example.com.services.gridfs.GridFSService
 import example.com.services.hashing.HashingService
 import example.com.services.token.TokenConfig
 import example.com.services.token.TokenService
@@ -35,14 +36,23 @@ fun Application.module() {
 
     val hashingService = HashingService()
     val tokenService = TokenService(tokenConfig)
-    val userSchema = UserSchema(postgresConnection, mongoDatabase)
+    val gridFsService = GridFSService(mongoDatabase, postgresConnection)
+    val userSchema = UserSchema(postgresConnection, gridFsService)
     val tokenSchema = TokenSchema(postgresConnection)
     val categorySchema = CategorySchema(postgresConnection)
     val tagSchema = TagSchema(postgresConnection)
-    val streamSchema = StreamSchema(postgresConnection, categorySchema, tagSchema);
+    val streamSchema = StreamSchema(postgresConnection, categorySchema, tagSchema, gridFsService);
 
     configureSerialization()
     configureHTTP()
     configureSecurity()
-    configureRouting(userSchema, tokenSchema, streamSchema, hashingService, tokenService, postgresConnection)
+    configureRouting(
+        userSchema,
+        tokenSchema,
+        streamSchema,
+        hashingService,
+        tokenService,
+        postgresConnection,
+        gridFsService
+    )
 }

@@ -1,4 +1,4 @@
-package example.com.plugins.routes.dtos
+package example.com.routes.dtos
 
 import kotlinx.serialization.Serializable
 
