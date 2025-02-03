@@ -236,7 +236,9 @@ class UserSchema(
         val resultSet = statement.executeQuery()
 
         val likerIds = mutableListOf<Int>()
-        while (resultSet.next()) resultSet.getInt("liker_id")
+        while (resultSet.next()) {
+            likerIds.add(resultSet.getInt("liker_id"))
+        }
 
         TallyDto(tally = likerIds.size, userIds = likerIds)
     }
