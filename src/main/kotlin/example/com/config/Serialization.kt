@@ -13,6 +13,7 @@ import java.time.Instant
 import java.time.LocalDate
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
+import java.util.Base64
 
 @OptIn(ExperimentalSerializationApi::class)
 @Serializer(forClass = Instant::class)
@@ -69,5 +70,20 @@ object LocalDateSerializer : KSerializer<LocalDate> {
     override fun deserialize(decoder: Decoder): LocalDate {
         val string = decoder.decodeString()
         return LocalDate.parse(string, formatter)
+    }
+}
+
+object ByteArrayAsBase64Serializer : KSerializer<ByteArray> {
+    override val descriptor: SerialDescriptor =
+        PrimitiveSerialDescriptor("ByteArrayAsBase64", PrimitiveKind.STRING)
+
+    override fun serialize(encoder: Encoder, value: ByteArray) {
+        val encoded = Base64.getEncoder().encodeToString(value)
+        encoder.encodeString(encoded)
+    }
+
+    override fun deserialize(decoder: Decoder): ByteArray {
+        val encoded = decoder.decodeString()
+        return Base64.getDecoder().decode(encoded)
     }
 }

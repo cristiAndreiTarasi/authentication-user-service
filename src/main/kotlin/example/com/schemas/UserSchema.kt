@@ -1,8 +1,5 @@
 package example.com.schemas
 
-import com.mongodb.client.MongoDatabase
-import com.mongodb.client.gridfs.GridFSBuckets
-import com.mongodb.client.gridfs.model.GridFSUploadOptions
 import example.com.config.LocalDateSerializer
 import example.com.config.ObjectIdSerializer
 import example.com.services.gridfs.GridFSService
@@ -12,11 +9,7 @@ import kotlinx.datetime.LocalDateTime
 import kotlinx.datetime.toJavaLocalDateTime
 import kotlinx.datetime.toKotlinLocalDateTime
 import kotlinx.serialization.Serializable
-import org.bson.Document
 import org.bson.types.ObjectId
-import java.io.ByteArrayInputStream
-import java.io.ByteArrayOutputStream
-import java.io.InputStream
 import java.sql.*
 import java.time.LocalDate
 
@@ -220,7 +213,7 @@ class UserSchema(
         val userDeleted = statement.executeUpdate() > 0
 
         if (userDeleted) {
-            val imageIdStr = gridFSService.getImageIdByUserId(id)
+            val imageIdStr = gridFSService.getAvatarIdByUserId(id)
             val imageId = imageIdStr?.let { ObjectId(it) }
             if (imageId != null) {
                 gridFSService.deleteImage(imageId)

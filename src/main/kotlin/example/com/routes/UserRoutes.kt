@@ -1,13 +1,10 @@
 package example.com.routes
 
-import example.com.UserRole
 import example.com.routes.dtos.ProfileFieldUpdateResponse
 import example.com.routes.dtos.UpdateBioDto
 import example.com.routes.dtos.UpdateOccupationDto
 import example.com.routes.dtos.UpdateUsernameDto
 import example.com.routes.dtos.UploadImageResponse
-import example.com.routes.dtos.roles.authorize
-import example.com.schemas.ExposedUser
 import example.com.schemas.TokenSchema
 import example.com.schemas.UserSchema
 import example.com.services.gridfs.GridFSService
@@ -27,8 +24,10 @@ import io.ktor.server.routing.delete
 import io.ktor.server.routing.get
 import io.ktor.server.routing.post
 import io.ktor.server.routing.put
-import kotlinx.serialization.Serializable
+import net.coobird.thumbnailator.Thumbnails
 import org.bson.types.ObjectId
+import java.io.ByteArrayInputStream
+import java.io.ByteArrayOutputStream
 import java.sql.Connection
 import java.sql.SQLException
 
@@ -59,12 +58,12 @@ fun Route.userRoutes(
             else call.respond(HttpStatusCode.NotFound, "User not found")
         }
 
-        get("/users/fetch/{userId}/image") {
+        get("/users/fetch/{userId}/avatar") {
             val userId = call.parameters["userId"]?.toIntOrNull()
                 ?: return@get call.respond(HttpStatusCode.BadRequest, "User ID is missing")
 
             // Fetch the image ID associated with the user ID from the database
-            val imageIdString = gridFSService.getImageIdByUserId(userId)
+            val imageIdString = gridFSService.getAvatarIdByUserId(userId)
                 ?: return@get call.respond(HttpStatusCode.NotFound, "Image not found for user")
 
             val imageId = try {
@@ -118,7 +117,7 @@ fun Route.userRoutes(
                 return@delete
             }
 
-            val imageIdString = gridFSService.getImageIdByUserId(userId)
+            val imageIdString = gridFSService.getAvatarIdByUserId(userId)
             val imageId = imageIdString?.let { ObjectId(it) }
 
             try {
@@ -207,7 +206,7 @@ fun Route.userRoutes(
             call.respond(HttpStatusCode.OK, ProfileFieldUpdateResponse("User username updated"))
         }
 
-        post("/users/update/{userId}/image") {
+        post("/users/update/{userId}/avatar") {
             val userId = call.parameters["userId"]?.toIntOrNull()
                 ?: return@post call.respond(
                     HttpStatusCode.BadRequest,
@@ -245,11 +244,23 @@ fun Route.userRoutes(
                 )
             }
 
-            fileContent?.let {
+            fileContent?.let { byteArray ->
                 try {
-                    val imageId = gridFSService.uploadImage(userId, it)
-                    val updateSuccess =
-                        userSchema.updateUserImageId(userId, imageId.toHexString())
+                    val imageId = gridFSService.uploadImage(userId, byteArray, transformation = { data ->
+                        val inputStream = ByteArrayInputStream(data)
+                        val outputStream = ByteArrayOutputStream()
+
+                        Thumbnails.of(inputStream)
+                            .forceSize(180, 180)
+                            .outputFormat("jpg")
+                            .outputQuality(0.8)
+                            .toOutputStream(outputStream)
+
+                        // Return the transformed image as a ByteArray.
+                        outputStream.toByteArray()
+                    })
+                    val updateSuccess = userSchema.updateUserImageId(userId, imageId.toHexString())
+
                     if (updateSuccess) {
                         call.respond(
                             HttpStatusCode.Created,

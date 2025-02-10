@@ -33,15 +33,24 @@ data class DeleteStreamResponse(
 )
 
 @Serializable
-data class StreamResponse(
+data class StreamResponseDto(
     val title: String,
     val description: String? = null,
     val userId: Int,
+    val username: String,
     val privacyType: PrivacyOptions,
     val ticketPrice: Float,
     val categories: List<CategoryDto>,
     val tags: List<String>,
     val createdAt: LocalDateTime,
     val thumbnailId: String? = null,
-    var thumbnailBytes: List<Byte>? = null
+    var thumbnailData: String? = null
+)
+
+@Serializable
+data class PaginatedStreamsResponse(
+    val streams: List<StreamResponseDto>,
+    val page: Int,
+    val pageSize: Int,
+    val totalStreams: Int
 )

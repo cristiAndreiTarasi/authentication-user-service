@@ -23,6 +23,7 @@ data class StreamDto(
     val title: String,
     val description: String? = null,
     val userId: Int,
+    val username: String,
     val privacyType: PrivacyOptions,
     val ticketPrice: Float,
     var categories: List<CategoryDto>,
@@ -30,7 +31,7 @@ data class StreamDto(
     val startsAt: LocalDateTime? = null,
     val createdAt: LocalDateTime,
     val thumbnailId: String? = null,
-    var thumbnailBytes: List<Byte>? = null
+    var thumbnailData: String? = null
 )
 
 class StreamSchema(
@@ -45,19 +46,40 @@ class StreamSchema(
             (title, description, user_id, privacy_type, ticket_price, thumbnail_id, starts_at, created_at) 
             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         """
-        private const val SELECT_STREAM_BY_ID = "SELECT * FROM streams WHERE id = ?"
+        private const val SELECT_STREAM_BY_ID = """
+           SELECT s.*, u.username 
+           FROM streams s
+           JOIN users u ON s.user_id = u.id
+           WHERE s.id = ? 
+        """
         private const val SELECT_ALL_STREAMS_PAGINATED = """
-            SELECT * FROM streams ORDER BY created_at DESC LIMIT ? OFFSET ?
+            SELECT s.*, u.username
+            FROM streams s
+            JOIN users u ON s.user_id = u.id
+            ORDER BY s.created_at DESC LIMIT ? OFFSET ?
         """
+
         private const val SELECT_STREAMS_BY_CATEGORY_PAGINATED = """
-            SELECT * FROM streams WHERE category_id = ? ORDER by created_at DESC LIMIT ? OFFSET ?
+            SELECT s.*, u.username
+            FROM streams s
+            JOIN users u ON s.user_id = u.id
+            WHERE s.category_id = ? ORDER BY s.created_at DESC LIMIT ? OFFSET ?
         """
+
         private const val SELECT_STREAMS_BY_TAG_PAGINATED = """
-            SELECT s.* FROM STREAMS s
+            SELECT s.*, u.username
+            FROM streams s
             JOIN streams_tags t ON s.id = t.stream_id
+            JOIN users u ON s.user_id = u.id
             WHERE t.tag = ? ORDER BY s.created_at DESC LIMIT ? OFFSET ?
         """
-        private const val SELECT_STREAMS_BY_USER_ID = "SELECT * FROM streams WHERE user_id = ?"
+
+        private const val SELECT_STREAMS_BY_USER_ID = """
+            SELECT s.*, u.username
+            FROM streams s
+            JOIN users u ON s.user_id = u.id
+            WHERE s.user_id = ?
+        """
         private const val DELETE_STREAM = "DELETE FROM streams WHERE id = ?"
     }
 
@@ -149,11 +171,13 @@ class StreamSchema(
             stream.tags = tagSchema.getTagsByStreamId(stream.id)
 
             // Fetch and encode thumbnail data
-            stream.thumbnailBytes = stream.thumbnailId?.let { thumbnailId ->
+            stream.thumbnailData = stream.thumbnailId?.let { thumbnailId ->
                 val thumbnailBytes = gridFSService.fetchImage(ObjectId(thumbnailId))
-                thumbnailBytes.let { bytes ->
-                    if (bytes.isNotEmpty()) bytes.toList()
-                    else null
+
+                if (thumbnailBytes.isNotEmpty()) {
+                    "data:image/jpeg;base64," + Base64.getEncoder().encodeToString(thumbnailBytes)
+                } else {
+                    null
                 }
             }
 
@@ -174,7 +198,7 @@ class StreamSchema(
         val streams = mutableListOf<StreamDto>()
 
         while (resultSet.next()) {
-            streams.add(resultSet.toStreamDataModel())
+            streams.add(resultSet.toStreamDataModelWithThumbnail())
         }
         return@dbQuery streams
     }
@@ -190,10 +214,26 @@ class StreamSchema(
         val streams = mutableListOf<StreamDto>()
 
         while (resultSet.next()) {
-            streams.add(resultSet.toStreamDataModel())
+            streams.add(resultSet.toStreamDataModelWithThumbnail())
         }
 
         return@dbQuery streams
+    }
+
+    private suspend fun ResultSet.toStreamDataModelWithThumbnail(): StreamDto {
+        val stream = toStreamDataModel()
+
+        stream.thumbnailData = stream.thumbnailId?.let { thumbnailId ->
+            val thumbnailBytes = gridFSService.fetchImage(ObjectId(thumbnailId))
+
+            if (thumbnailBytes.isNotEmpty()) {
+                "data:image/jpeg;base64," + Base64.getEncoder().encodeToString(thumbnailBytes)
+            } else {
+                null
+            }
+        }
+
+        return stream
     }
 
     // Function to delete a stream
@@ -217,6 +257,7 @@ class StreamSchema(
             title = getString("title"),
             description = getString("description"),
             userId = getInt("user_id"),
+            username = getString("username"),
             privacyType = PrivacyOptions.entries.first { it.displayName == getString("privacy_type") },
             ticketPrice = getFloat("ticket_price"),
             categories = emptyList(),  // Initially empty, will be filled in findById

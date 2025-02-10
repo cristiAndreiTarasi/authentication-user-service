@@ -48,4 +48,6 @@ dependencies {
 
     implementation("org.litote.kmongo:kmongo:4.8.0")
     implementation("org.litote.kmongo:kmongo-coroutine:4.8.0")
+
+    implementation("net.coobird:thumbnailator:0.4.20")
 }

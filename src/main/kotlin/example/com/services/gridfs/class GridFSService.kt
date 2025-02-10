@@ -26,7 +26,7 @@ interface IGridFSService {
      * @param imageData The byte array representing the image to be uploaded.
      * @return ObjectId The unique identifier for the uploaded image in GridFS.
      */
-    suspend fun uploadImage(userId: Int, imageData: ByteArray): ObjectId
+    suspend fun uploadImage(userId: Int, imageData: ByteArray, transformation: (ByteArray) -> ByteArray): ObjectId
 
     /**
      * Fetches an image from GridFS by its ID.
@@ -57,7 +57,9 @@ interface IGridFSService {
      * @param userId The ID of the user whose image ID is being retrieved.
      * @return String? The image ID as a string, or `null` if no image is found for the user.
      */
-    suspend fun getImageIdByUserId(userId: Int): String?
+    suspend fun getAvatarIdByUserId(userId: Int): String?
+
+    suspend fun getThumbnailIdByUserId(userId: Int): String?
 }
 
 class GridFSService(
@@ -65,22 +67,30 @@ class GridFSService(
     private val psqlConnection: Connection
 ) : IGridFSService {
     companion object {
-        private const val SELECT_IMAGE_ID = "SELECT image_id FROM users WHERE id = ?"
+        private const val SELECT_AVATAR_ID = "SELECT image_id FROM users WHERE id = ?"
+        private const val SELECT_THUMBNAIL_ID = "SELECT thumbnail_id FROM streams WHERE id = ?"
     }
 
     private val gridFSBuckets = GridFSBuckets.create(mongoDatabase, "images")
 
-    override suspend fun uploadImage(userId: Int, imageData: ByteArray): ObjectId = withContext(Dispatchers.IO) {
-        val previousImage = getImageIdByUserId(userId)?.let { ObjectId(it) }
+    override suspend fun uploadImage(
+        userId: Int,
+        imageData: ByteArray,
+        transformation: (ByteArray) -> ByteArray
+    ): ObjectId = withContext(Dispatchers.IO) {
+        val previousImage = getAvatarIdByUserId(userId)?.let { ObjectId(it) }
         previousImage?.let { deleteImage(it) }
 
+        // Process the incoming image bytes to create a thumbnail with 9:16 aspect ratio.
+        val processedImage = transformation(imageData)
+
         val options = GridFSUploadOptions().chunkSizeBytes(255 * 1024) // 255KB
-        val streamToUploadFrom: InputStream = ByteArrayInputStream(imageData)
+        val streamToUploadFrom: InputStream = ByteArrayInputStream(processedImage)
         val fileId = gridFSBuckets.uploadFromStream("image", streamToUploadFrom, options)
         val imagesCollection = mongoDatabase.getCollection("images")
         val imageDocument = Document("userId", userId).append("imageId", fileId)
-        imagesCollection.insertOne(imageDocument)
 
+        imagesCollection.insertOne(imageDocument)
         fileId
     }
 
@@ -109,13 +119,25 @@ class GridFSService(
         deleteMetadataResult.deletedCount > 0 && deleteGridFSResult
     }
 
-    override suspend fun getImageIdByUserId(userId: Int): String? = withContext(Dispatchers.IO) {
-        val statement = psqlConnection.prepareStatement(SELECT_IMAGE_ID)
+    override suspend fun getAvatarIdByUserId(userId: Int): String? = withContext(Dispatchers.IO) {
+        val statement = psqlConnection.prepareStatement(SELECT_AVATAR_ID)
         statement.setInt(1, userId)
         val resultSet = statement.executeQuery()
 
         if (resultSet.next()) {
             resultSet.getString("image_id")
+        } else {
+            null
+        }
+    }
+
+    override suspend fun getThumbnailIdByUserId(streamId: Int): String? = withContext(Dispatchers.IO) {
+        val statement = psqlConnection.prepareStatement(SELECT_THUMBNAIL_ID)
+        statement.setInt(1, streamId)
+        val resultSet = statement.executeQuery()
+
+        if (resultSet.next()) {
+            resultSet.getString("thumbnail_id")
         } else {
             null
         }
