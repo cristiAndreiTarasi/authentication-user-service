@@ -26,12 +26,16 @@ import io.ktor.server.routing.get
 import io.ktor.server.routing.post
 import kotlinx.datetime.Clock
 import kotlinx.datetime.TimeZone
+import kotlinx.datetime.toKotlinLocalDateTime
 import kotlinx.datetime.toLocalDateTime
 import kotlinx.serialization.json.Json
 import net.coobird.thumbnailator.Thumbnails
 import org.bson.types.ObjectId
+import org.litote.kmongo.currentDate
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
+import java.time.LocalDateTime
+import java.time.format.DateTimeParseException
 import java.util.Base64
 
 fun Route.streamRoutes(
@@ -58,9 +62,19 @@ fun Route.streamRoutes(
 
         // Route to get all streams
         get("/streams") {
-            val page = call.parameters["page"]?.toIntOrNull() ?: 1
-            val pageSize = call.parameters["pageSize"]?.toIntOrNull() ?: 10
-            val streams = streamSchema.fetchStreamsPage(page, pageSize)
+            val cursorParam = call.parameters["cursor"]
+            val limit = call.parameters["limit"]?.toIntOrNull() ?: 10
+
+            val cursor: LocalDateTime? = cursorParam?.let {
+                try {
+                    LocalDateTime.parse(it)
+                } catch (exc: DateTimeParseException) {
+                    call.respond(HttpStatusCode.BadRequest, "Invalid cursor format!")
+                    return@get
+                }
+            }
+
+            val streams = streamSchema.fetchStreamsCursor(cursor?.toKotlinLocalDateTime(), limit)
 
             call.respond(HttpStatusCode.OK, streams.map { it.toStreamResponse() })
         }
@@ -143,7 +157,8 @@ fun Route.streamRoutes(
                             val outputStream = ByteArrayOutputStream()
 
                             Thumbnails.of(inputStream)
-                                .forceSize(180, 320)
+                                .size(180, 320)
+                                .keepAspectRatio(true)
                                 .outputFormat("jpg")
                                 .outputQuality(0.8)
                                 .toOutputStream(outputStream)
@@ -250,6 +265,7 @@ fun Route.streamRoutes(
 // Extension function to convert Stream to StreamResponse DTO
 fun StreamDto.toStreamResponse(): StreamResponseDto {
     return StreamResponseDto(
+        id = id,
         title = title,
         description = description,
         userId = userId,

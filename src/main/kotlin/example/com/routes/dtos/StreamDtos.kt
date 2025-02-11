@@ -34,6 +34,7 @@ data class DeleteStreamResponse(
 
 @Serializable
 data class StreamResponseDto(
+    val id: Int? = null,
     val title: String,
     val description: String? = null,
     val userId: Int,

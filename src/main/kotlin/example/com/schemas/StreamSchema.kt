@@ -59,6 +59,16 @@ class StreamSchema(
             ORDER BY s.created_at DESC LIMIT ? OFFSET ?
         """
 
+        private const val SELECT_ALL_STREAMS_CURSOR = """
+            SELECT s.*, u.username
+            FROM streams s
+            JOIN users u ON s.user_id = u.id
+            /* If a cursor is provided, return only streams older than that */
+            WHERE (CAST(? AS TIMESTAMP) IS NULL OR s.created_at < ?)
+            ORDER BY s.created_at DESC
+            LIMIT ?
+        """
+
         private const val SELECT_STREAMS_BY_CATEGORY_PAGINATED = """
             SELECT s.*, u.username
             FROM streams s
@@ -154,11 +164,18 @@ class StreamSchema(
         return@dbQuery streams
     }
 
-    // Function to fetch all streams
-    suspend fun fetchStreamsPage(page: Int, pageSize: Int): List<StreamDto> = dbQuery { connection ->
-        val statement = connection.prepareStatement(SELECT_ALL_STREAMS_PAGINATED)
-        statement.setInt(1, pageSize)
-        statement.setInt(2, (page - 1) * pageSize)
+    suspend fun fetchStreamsCursor(cursor: LocalDateTime?, limit: Int): List<StreamDto> = dbQuery { connection ->
+        val statement = connection.prepareStatement(SELECT_ALL_STREAMS_CURSOR)
+        // If no cursor is provided (initial load), we pass null; otherwise, pass the timestamp.
+        if (cursor == null) {
+            statement.setNull(1, Types.TIMESTAMP)
+            statement.setNull(2, Types.TIMESTAMP)
+        } else {
+            val timestamp = Timestamp.valueOf(cursor.toJavaLocalDateTime())
+            statement.setTimestamp(1, timestamp)
+            statement.setTimestamp(2, timestamp)
+        }
+        statement.setInt(3, limit)
 
         val resultSet = statement.executeQuery()
         val streams = mutableListOf<StreamDto>()
@@ -173,7 +190,6 @@ class StreamSchema(
             // Fetch and encode thumbnail data
             stream.thumbnailData = stream.thumbnailId?.let { thumbnailId ->
                 val thumbnailBytes = gridFSService.fetchImage(ObjectId(thumbnailId))
-
                 if (thumbnailBytes.isNotEmpty()) {
                     "data:image/jpeg;base64," + Base64.getEncoder().encodeToString(thumbnailBytes)
                 } else {
@@ -186,6 +202,7 @@ class StreamSchema(
 
         return@dbQuery streams
     }
+
 
     // Function to fetch streams filtered by category
     suspend fun fetchStreamsByCategory(categoryId: Int, page: Int, pageSize: Int): List<StreamDto> = dbQuery { connection ->
