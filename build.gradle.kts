@@ -50,4 +50,10 @@ dependencies {
     implementation("org.litote.kmongo:kmongo-coroutine:4.8.0")
 
     implementation("net.coobird:thumbnailator:0.4.20")
+
+    implementation("io.ktor:ktor-client-okhttp:2.3.3")
+
+    implementation(libs.ktor.server.websockets)
+
+    implementation("redis.clients:jedis:5.1.0")
 }

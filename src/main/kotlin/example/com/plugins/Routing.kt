@@ -9,6 +9,7 @@ import example.com.schemas.TokenSchema
 import example.com.schemas.UserSchema
 import example.com.services.gridfs.GridFSService
 import example.com.services.hashing.HashingService
+import example.com.services.redis.VisitorCache
 import example.com.services.token.TokenService
 import io.ktor.server.application.Application
 import io.ktor.server.routing.routing

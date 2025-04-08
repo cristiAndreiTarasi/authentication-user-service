@@ -1,6 +1,5 @@
 package example.com
 
-import com.mongodb.client.gridfs.GridFSBuckets
 import example.com.config.Constants
 import example.com.plugins.*
 import example.com.schemas.CategorySchema
@@ -10,6 +9,7 @@ import example.com.schemas.TokenSchema
 import example.com.schemas.UserSchema
 import example.com.services.gridfs.GridFSService
 import example.com.services.hashing.HashingService
+import example.com.services.redis.VisitorCache
 import example.com.services.token.TokenConfig
 import example.com.services.token.TokenService
 import io.ktor.server.application.*
@@ -41,10 +41,11 @@ fun Application.module() {
     val tokenSchema = TokenSchema(postgresConnection)
     val categorySchema = CategorySchema(postgresConnection)
     val tagSchema = TagSchema(postgresConnection)
-    val streamSchema = StreamSchema(postgresConnection, categorySchema, tagSchema, gridFsService);
+    val streamSchema = StreamSchema(postgresConnection, categorySchema, tagSchema, gridFsService)
 
     configureSerialization()
     configureHTTP()
+    configureSockets()
     configureSecurity()
     configureRouting(
         userSchema,

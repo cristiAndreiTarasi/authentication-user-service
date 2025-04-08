@@ -1,13 +1,14 @@
 package example.com.schemas
 
 import example.com.PrivacyOptions
+import example.com.routes.dtos.StreamDto
+import example.com.schemas.queries.StreamQueries
 import example.com.services.gridfs.GridFSService
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.datetime.LocalDateTime
 import kotlinx.datetime.toJavaLocalDateTime
 import kotlinx.datetime.toKotlinLocalDateTime
-import kotlinx.serialization.Serializable
 import org.bson.types.ObjectId
 import java.sql.Connection
 import java.sql.ResultSet
@@ -17,84 +18,14 @@ import java.sql.Timestamp
 import java.sql.Types
 import java.util.Base64
 
-@Serializable
-data class StreamDto(
-    val id: Int? = null,
-    val title: String,
-    val description: String? = null,
-    val userId: Int,
-    val username: String,
-    val privacyType: PrivacyOptions,
-    val ticketPrice: Float,
-    var categories: List<CategoryDto>,
-    var tags: List<String>,
-    val startsAt: LocalDateTime? = null,
-    val createdAt: LocalDateTime,
-    val thumbnailId: String? = null,
-    var thumbnailData: String? = null
-)
-
 class StreamSchema(
     private val dbConnection: Connection,
     private val categorySchema: CategorySchema,
     private val tagSchema: TagSchema,
     private val gridFSService: GridFSService
 ) {
-    companion object {
-        private const val INSERT_STREAM = """
-            INSERT INTO streams 
-            (title, description, user_id, privacy_type, ticket_price, thumbnail_id, starts_at, created_at) 
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        """
-        private const val SELECT_STREAM_BY_ID = """
-           SELECT s.*, u.username 
-           FROM streams s
-           JOIN users u ON s.user_id = u.id
-           WHERE s.id = ? 
-        """
-        private const val SELECT_ALL_STREAMS_PAGINATED = """
-            SELECT s.*, u.username
-            FROM streams s
-            JOIN users u ON s.user_id = u.id
-            ORDER BY s.created_at DESC LIMIT ? OFFSET ?
-        """
-
-        private const val SELECT_ALL_STREAMS_CURSOR = """
-            SELECT s.*, u.username
-            FROM streams s
-            JOIN users u ON s.user_id = u.id
-            /* If a cursor is provided, return only streams older than that */
-            WHERE (CAST(? AS TIMESTAMP) IS NULL OR s.created_at < ?)
-            ORDER BY s.created_at DESC
-            LIMIT ?
-        """
-
-        private const val SELECT_STREAMS_BY_CATEGORY_PAGINATED = """
-            SELECT s.*, u.username
-            FROM streams s
-            JOIN users u ON s.user_id = u.id
-            WHERE s.category_id = ? ORDER BY s.created_at DESC LIMIT ? OFFSET ?
-        """
-
-        private const val SELECT_STREAMS_BY_TAG_PAGINATED = """
-            SELECT s.*, u.username
-            FROM streams s
-            JOIN streams_tags t ON s.id = t.stream_id
-            JOIN users u ON s.user_id = u.id
-            WHERE t.tag = ? ORDER BY s.created_at DESC LIMIT ? OFFSET ?
-        """
-
-        private const val SELECT_STREAMS_BY_USER_ID = """
-            SELECT s.*, u.username
-            FROM streams s
-            JOIN users u ON s.user_id = u.id
-            WHERE s.user_id = ?
-        """
-        private const val DELETE_STREAM = "DELETE FROM streams WHERE id = ?"
-    }
-
     suspend fun create(stream: StreamDto): Int = dbQuery { connection ->
-        val statement = connection.prepareStatement(INSERT_STREAM, Statement.RETURN_GENERATED_KEYS)
+        val statement = connection.prepareStatement(StreamQueries.INSERT_STREAM, Statement.RETURN_GENERATED_KEYS)
 
         statement.setString(1, stream.title)
         statement.setString(2, stream.description)
@@ -127,7 +58,7 @@ class StreamSchema(
 
     // Function to fetch a stream by ID
     suspend fun findById(streamId: Int): StreamDto? = dbQuery { connection ->
-        val statement = connection.prepareStatement(SELECT_STREAM_BY_ID)
+        val statement = connection.prepareStatement(StreamQueries.SELECT_STREAM_BY_ID)
         statement.setInt(1, streamId)
 
         val resultSet = statement.executeQuery()
@@ -145,7 +76,7 @@ class StreamSchema(
     }
 
     suspend fun findByUserId(userId: Int): List<StreamDto> = dbQuery { connection ->
-        val statement = connection.prepareStatement(SELECT_STREAMS_BY_USER_ID)
+        val statement = connection.prepareStatement(StreamQueries.SELECT_STREAMS_BY_USER_ID)
         statement.setInt(1, userId)
 
         val resultSet = statement.executeQuery()
@@ -165,7 +96,7 @@ class StreamSchema(
     }
 
     suspend fun fetchStreamsCursor(cursor: LocalDateTime?, limit: Int): List<StreamDto> = dbQuery { connection ->
-        val statement = connection.prepareStatement(SELECT_ALL_STREAMS_CURSOR)
+        val statement = connection.prepareStatement(StreamQueries.SELECT_ALL_STREAMS_CURSOR)
         // If no cursor is provided (initial load), we pass null; otherwise, pass the timestamp.
         if (cursor == null) {
             statement.setNull(1, Types.TIMESTAMP)
@@ -203,10 +134,9 @@ class StreamSchema(
         return@dbQuery streams
     }
 
-
     // Function to fetch streams filtered by category
     suspend fun fetchStreamsByCategory(categoryId: Int, page: Int, pageSize: Int): List<StreamDto> = dbQuery { connection ->
-        val statement = connection.prepareStatement(SELECT_STREAMS_BY_CATEGORY_PAGINATED)
+        val statement = connection.prepareStatement(StreamQueries.SELECT_STREAMS_BY_CATEGORY_PAGINATED)
         statement.setInt(1, categoryId)
         statement.setInt(2, pageSize)
         statement.setInt(3, (page - 1) * pageSize)
@@ -222,7 +152,7 @@ class StreamSchema(
 
     // Function to fetch streams filtered by tag
     suspend fun fetchStreamsByTag(tag: String, page: Int, pageSize: Int): List<StreamDto> = dbQuery { connection ->
-        val statement = connection.prepareStatement(SELECT_STREAMS_BY_TAG_PAGINATED)
+        val statement = connection.prepareStatement(StreamQueries.SELECT_STREAMS_BY_TAG_PAGINATED)
         statement.setString(1, tag)
         statement.setInt(2, pageSize)
         statement.setInt(3, (page - 1) * pageSize)
@@ -262,7 +192,7 @@ class StreamSchema(
             tagSchema.deleteTagsForStream(streamId, stream.tags, connection)
         }
 
-        val statement = connection.prepareStatement(DELETE_STREAM)
+        val statement = connection.prepareStatement(StreamQueries.DELETE_STREAM)
         statement.setInt(1, streamId)
         return@dbQuery statement.executeUpdate() > 0
     }

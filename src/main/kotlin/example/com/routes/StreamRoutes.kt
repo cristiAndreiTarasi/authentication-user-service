@@ -6,7 +6,7 @@ import example.com.routes.dtos.CreateStreamRequest
 import example.com.routes.dtos.CreateStreamResponse
 import example.com.routes.dtos.DeleteStreamResponse
 import example.com.routes.dtos.StreamResponseDto
-import example.com.schemas.StreamDto
+import example.com.routes.dtos.StreamDto
 import example.com.schemas.StreamSchema
 import example.com.schemas.UserSchema
 import example.com.services.gridfs.GridFSService

@@ -1,5 +1,7 @@
 package example.com.schemas
 
+import example.com.routes.dtos.CategoryDto
+import example.com.schemas.queries.CategoryQueries
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
@@ -8,34 +10,12 @@ import java.sql.ResultSet
 import java.sql.SQLException
 import java.sql.Statement
 
-@Serializable
-data class CategoryDto(
-    val id: Int? = null,
-    val name: String,
-)
-
 class CategorySchema(private val dbConnection: Connection) {
-    companion object {
-        private const val INSERT_CATEGORY = "INSERT INTO categories (name) VALUES (?)"
-        private const val SELECT_CATEGORY_BY_NAME = "SELECT id FROM categories WHERE name = ?"
-        private const val SELECT_ALL_CATEGORIES = "SELECT * FROM categories"
-        private const val INSERT_STREAM_CATEGORY = "INSERT INTO stream_categories (stream_id, category_id) VALUES (?, ?)"
-        private const val DELETE_STREAM_CATEGORY = "DELETE FROM stream_categories WHERE stream_id = ? AND category_id = ?"
-        private const val COUNT_CATEGORY_USAGE = "SELECT COUNT(*) FROM stream_categories WHERE category_id = ?"
-        private const val DELETE_CATEGORY = "DELETE FROM categories WHERE id = ?"
-        private const val SELECT_CATEGORIES_BY_STREAM_ID = """
-            SELECT c.* 
-            FROM categories c 
-            JOIN stream_categories sc ON c.id = sc.category_id 
-            WHERE sc.stream_id = ?
-        """
-    }
-
     /*
     * Insert a new category
     * */
     suspend fun insertCategory(name: String): Int = dbQuery { connection ->
-        val selectStatement = connection.prepareStatement(SELECT_CATEGORY_BY_NAME)
+        val selectStatement = connection.prepareStatement(CategoryQueries.SELECT_CATEGORY_BY_NAME)
         selectStatement.setString(1, name)
         val resultSet = selectStatement.executeQuery()
 
@@ -45,7 +25,7 @@ class CategorySchema(private val dbConnection: Connection) {
         }
 
         // If category doesn't exist, insert it
-        val insertedStatement = connection.prepareStatement(INSERT_CATEGORY, Statement.RETURN_GENERATED_KEYS)
+        val insertedStatement = connection.prepareStatement(CategoryQueries.INSERT_CATEGORY, Statement.RETURN_GENERATED_KEYS)
         insertedStatement.setString(1, name)
         insertedStatement.executeUpdate()
 
@@ -61,7 +41,7 @@ class CategorySchema(private val dbConnection: Connection) {
     * Link categories to a stream
     * */
     suspend fun insertCategoriesForStream(streamId: Int, categories: List<CategoryDto>, connection: Connection) {
-        val statement = connection.prepareStatement(INSERT_STREAM_CATEGORY)
+        val statement = connection.prepareStatement(CategoryQueries.INSERT_STREAM_CATEGORY)
 
         for (category in categories) {
             val categoryId = insertCategory(category.name)
@@ -74,7 +54,7 @@ class CategorySchema(private val dbConnection: Connection) {
     }
 
     suspend fun getAllCategories(): List<CategoryDto> = dbQuery { connection ->
-        val statement = connection.prepareStatement(SELECT_ALL_CATEGORIES)
+        val statement = connection.prepareStatement(CategoryQueries.SELECT_ALL_CATEGORIES)
         val resultSet = statement.executeQuery()
 
         val categories = mutableListOf<CategoryDto>()
@@ -85,7 +65,7 @@ class CategorySchema(private val dbConnection: Connection) {
     }
 
     suspend fun getCategoriesByStreamId(streamId: Int): List<CategoryDto> = dbQuery { connection ->
-        val statement = connection.prepareStatement(SELECT_CATEGORIES_BY_STREAM_ID)
+        val statement = connection.prepareStatement(CategoryQueries.SELECT_CATEGORIES_BY_STREAM_ID)
         statement.setInt(1, streamId)
 
         val resultSet = statement.executeQuery()
@@ -98,7 +78,7 @@ class CategorySchema(private val dbConnection: Connection) {
 
     // Delete categories associated with a stream when the stream ends
     suspend fun deleteCategoriesForStream(streamId: Int, categories: List<CategoryDto>) = dbQuery { connection ->
-        val deleteStatement = connection.prepareStatement(DELETE_STREAM_CATEGORY)
+        val deleteStatement = connection.prepareStatement(CategoryQueries.DELETE_STREAM_CATEGORY)
 
         for (category in categories) {
             // First, find the category ID

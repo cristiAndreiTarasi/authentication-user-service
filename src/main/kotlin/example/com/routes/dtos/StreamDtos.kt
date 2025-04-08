@@ -1,9 +1,25 @@
 package example.com.routes.dtos
 
 import example.com.PrivacyOptions
-import example.com.schemas.CategoryDto
 import kotlinx.datetime.LocalDateTime
 import kotlinx.serialization.Serializable
+
+@Serializable
+data class StreamDto(
+    val id: Int? = null,
+    val title: String,
+    val description: String? = null,
+    val userId: Int,
+    val username: String,
+    val privacyType: PrivacyOptions,
+    val ticketPrice: Float,
+    var categories: List<CategoryDto>,
+    var tags: List<String>,
+    val startsAt: LocalDateTime? = null,
+    val createdAt: LocalDateTime,
+    val thumbnailId: String? = null,
+    var thumbnailData: String? = null
+)
 
 @Serializable
 data class CreateStreamRequest(

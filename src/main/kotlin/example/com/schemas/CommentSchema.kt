@@ -1,5 +1,7 @@
 package example.com.schemas
 
+import example.com.routes.dtos.CommentDataModel
+import example.com.schemas.queries.CommentsQueries
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.datetime.LocalDate
@@ -13,22 +15,7 @@ import java.sql.SQLException
 import java.sql.Statement
 import java.sql.Timestamp
 
-@Serializable
-data class CommentDataModel(
-    val id: Int,
-    val streamId: Int,
-    val userId: Int,
-    val message: String,
-    val createdAt: LocalDateTime
-)
-
 class CommentSchema(private val dbConnection: Connection) {
-    companion object {
-        private const val INSERT_COMMENT = "INSERT INTO comments (stream_id, user_id, message, created_at) VALUES (?, ?, ?, ?)"
-        private const val SELECT_COMMENTS_BY_STREAM_ID = "SELECT * FROM comments WHERE stream_id = ?"
-        private const val DELETE_COMMENT = "DELETE FROM comments WHERE id = ?"
-    }
-
     init {
         dbConnection.createStatement()
     }
@@ -42,7 +29,7 @@ class CommentSchema(private val dbConnection: Connection) {
     }
 
     suspend fun addComment(comment: CommentDataModel): Int = dbQuery { connection ->
-        val statement = connection.prepareStatement(INSERT_COMMENT, Statement.RETURN_GENERATED_KEYS)
+        val statement = connection.prepareStatement(CommentsQueries.INSERT_COMMENT, Statement.RETURN_GENERATED_KEYS)
         statement.setInt(1, comment.streamId)
         statement.setInt(2, comment.userId)
         statement.setString(3, comment.message)
@@ -58,7 +45,7 @@ class CommentSchema(private val dbConnection: Connection) {
     }
 
     suspend fun deleteComment(commentId: Int): Boolean = dbQuery { connection ->
-        val statement = connection.prepareStatement(DELETE_COMMENT)
+        val statement = connection.prepareStatement(CommentsQueries.DELETE_COMMENT)
         statement.setInt(1, commentId)
         statement.executeUpdate() > 0
     }
