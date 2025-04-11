@@ -14,6 +14,7 @@ import example.com.routes.dtos.SigninRequestDto
 import example.com.routes.dtos.SignoutRequest
 import example.com.routes.dtos.SignoutResponse
 import example.com.routes.dtos.SignupRequestDto
+import example.com.routes.dtos.roles.ResponseDto
 import example.com.routes.dtos.roles.authorize
 import example.com.schemas.ExposedUser
 import example.com.schemas.Token
@@ -329,7 +330,7 @@ fun Route.authenticationRoutes(
     authenticate("auth-jwt") {
         post("/signout") {
             val principal = call.principal<JWTPrincipal>()
-            val role = principal?.payload?.getClaim("role")?.asString()
+            val role = principal?.let { tokenService.getClaim(it, "role") }
 
             if (role == UserRole.OWNER.roleName) {
                 val request = try {
@@ -366,6 +367,11 @@ fun Route.authenticationRoutes(
                         SignoutResponse("Failed to sign out user: ${e.message}")
                     )
                 }
+            } else {
+                call.respond(
+                    HttpStatusCode.Unauthorized,
+                    ResponseDto("You don't have permission.")
+                )
             }
         }
     }

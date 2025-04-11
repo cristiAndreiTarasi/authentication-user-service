@@ -8,11 +8,20 @@ enum class PrivacyOptions(val displayName: String) {
 
 enum class UserRole(val roleName: String) {
     OWNER("owner"),
+    PUBLISHER("publisher"),
+    VISITOR("visitor"),
     ADMIN("admin"),
     MODERATOR("moderator"),
     VIP("vip"),
     USER("user"),
     GUEST("guest");
+}
+
+enum class StreamAction(val actionName: String) {
+    CHAT("chat"),
+    LIKE("like"),
+    MUTE("mute"),
+    BAN("ban")
 }
 
 enum class PartDataItems(val displayName: String) {

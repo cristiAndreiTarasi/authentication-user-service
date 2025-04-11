@@ -1,6 +1,7 @@
 package example.com.routes.dtos.roles
 
 import io.ktor.http.HttpStatusCode
+import io.ktor.server.application.ApplicationCallPipeline.ApplicationPhase.Plugins
 import io.ktor.server.application.call
 import io.ktor.server.auth.authenticate
 import io.ktor.server.auth.jwt.JWTPrincipal
@@ -32,7 +33,7 @@ data class ResponseDto(
  * - To allow access to any authenticated user:
  *      authorize() { ... }
  */
-fun Route.authorize(vararg requiredRoles: String, block: Route.() -> Unit): Route {
+/*fun Route.authorize(vararg requiredRoles: String, block: Route.() -> Unit): Route {
     return authenticate("auth-jwt") {
         route("") {
             handle {
@@ -64,15 +65,8 @@ fun Route.authorize(vararg requiredRoles: String, block: Route.() -> Unit): Rout
             block()
         }
     }
-}
+}*/
 
-
-
-
-
-
-
-/*
 fun Route.authorize(vararg requiredRoles: String, block: Route.() -> Unit): Route {
     return authenticate("auth-jwt") {
         intercept(Plugins) {
@@ -105,4 +99,4 @@ fun Route.authorize(vararg requiredRoles: String, block: Route.() -> Unit): Rout
 
         block()
     }
-}*/
+}

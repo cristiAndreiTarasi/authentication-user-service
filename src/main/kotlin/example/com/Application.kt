@@ -10,6 +10,7 @@ import example.com.schemas.UserSchema
 import example.com.services.gridfs.GridFSService
 import example.com.services.hashing.HashingService
 import example.com.services.redis.VisitorCache
+import example.com.services.role.RoleService
 import example.com.services.token.TokenConfig
 import example.com.services.token.TokenService
 import io.ktor.server.application.*
@@ -36,6 +37,7 @@ fun Application.module() {
 
     val hashingService = HashingService()
     val tokenService = TokenService(tokenConfig)
+    val roleService = RoleService()
     val gridFsService = GridFSService(mongoDatabase, postgresConnection)
     val userSchema = UserSchema(postgresConnection, gridFsService)
     val tokenSchema = TokenSchema(postgresConnection)
@@ -45,7 +47,7 @@ fun Application.module() {
 
     configureSerialization()
     configureHTTP()
-    configureSockets()
+    configureSockets(tokenService, roleService)
     configureSecurity()
     configureRouting(
         userSchema,

@@ -1,12 +1,7 @@
 package example.com.routes
 
-import com.auth0.jwt.JWT
-import com.sun.tools.javac.util.Log
 import example.com.routes.dtos.SrsHookPayload
 import example.com.schemas.UserSchema
-import example.com.services.redis.VisitorCache
-import example.com.services.socket.VisitorDto
-import example.com.services.socket.VisitorsManager
 import example.com.services.token.TokenService
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.application.call
@@ -73,37 +68,13 @@ fun Route.srsHttpHookRoutes(
             }
         }
 
-        post("/sessions") {
+        /*post("/sessions") {
             val payload = call.receive<SrsHookPayload>()
             val action = SrsHookSessions.fromActionName(payload.action)
-            val token = extractToken(payload.param)
-
-            if (token == null) {
-                call.respondText("Missing token", status = HttpStatusCode.BadRequest)
-                return@post
-            }
-
-            val userId = tokenService.getClaimFromToken(token, "userId")
-
-            if (userId == null) {
-                call.respondText("Invalid token", status = HttpStatusCode.BadRequest)
-                return@post
-            }
-
-            val visitor = VisitorDto(
-                userId = userId,
-//                name = payload.name,
-//                avatarUrl = payload.avatarUrl
-            )
-
-            val visitorCache = VisitorCache()
 
             when (action) {
                 SrsHookSessions.ON_PLAY -> {
                     if (handleOnPlay(payload)) {
-                        val updatedVisitorData = visitorCache.incrementVisitorCount(streamId, visitor)
-                        VisitorsManager.broadcastVisitorUpdate(streamId, updatedVisitorData)
-
                         call.respondText("0", status = HttpStatusCode.OK)
                     } else {
                         call.respondText("1", status = HttpStatusCode.BadRequest)
@@ -112,9 +83,6 @@ fun Route.srsHttpHookRoutes(
 
                 SrsHookSessions.ON_STOP -> {
                     if (handleOnStop(payload)) {
-                        val updatedVisitorData = visitorCache.decrementVisitorCount(streamId, visitor)
-                        VisitorsManager.broadcastVisitorUpdate(streamId, updatedVisitorData)
-
                         call.respondText("0", status = HttpStatusCode.OK)
                     } else {
                         call.respondText("1", status = HttpStatusCode.BadRequest)
@@ -123,7 +91,7 @@ fun Route.srsHttpHookRoutes(
 
                 null -> call.respondText("Invalid action", status = HttpStatusCode.BadRequest)
             }
-        }
+        }*/
     }
 }
 

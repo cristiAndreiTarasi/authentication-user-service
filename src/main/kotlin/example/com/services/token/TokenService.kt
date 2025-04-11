@@ -2,6 +2,7 @@ package example.com.services.token
 
 import com.auth0.jwt.JWT
 import com.auth0.jwt.algorithms.Algorithm
+import io.ktor.server.auth.jwt.JWTPrincipal
 import java.time.Duration
 import java.time.LocalDateTime
 import java.time.ZoneId
@@ -22,6 +23,9 @@ interface ITokenService {
     fun generateAccessToken(claims: List<TokenClaim>, timezone: String): String
     fun generateRefreshToken(timezone: String): String
     fun getClaimFromToken(token: String, claimName: String): String?
+    fun getClaim(principal: JWTPrincipal, claimName: String): String? {
+        return principal.payload.getClaim(claimName)?.asString()
+    }
 }
 
 // Generates a JWT token using the provided configuration and claims
