@@ -9,7 +9,6 @@ import example.com.schemas.TokenSchema
 import example.com.schemas.UserSchema
 import example.com.services.gridfs.GridFSService
 import example.com.services.hashing.HashingService
-import example.com.services.redis.VisitorCache
 import example.com.services.role.RoleService
 import example.com.services.token.TokenConfig
 import example.com.services.token.TokenService
