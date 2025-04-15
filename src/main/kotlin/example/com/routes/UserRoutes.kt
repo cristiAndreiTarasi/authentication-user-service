@@ -5,6 +5,7 @@ import example.com.routes.dtos.UpdateBioDto
 import example.com.routes.dtos.UpdateOccupationDto
 import example.com.routes.dtos.UpdateUsernameDto
 import example.com.routes.dtos.UploadImageResponse
+import example.com.routes.dtos.UsernameResponse
 import example.com.schemas.TokenSchema
 import example.com.schemas.UserSchema
 import example.com.services.gridfs.GridFSService
@@ -56,6 +57,19 @@ fun Route.userRoutes(
             val user = userSchema.getUserById(id)
             if (user != null) call.respond(HttpStatusCode.OK, user)
             else call.respond(HttpStatusCode.NotFound, "User not found")
+        }
+
+        get("/users/{userId}/username") {
+            val userId = call.parameters["userId"]?.toIntOrNull()
+                ?: return@get call.respond(HttpStatusCode.BadRequest, "Invalid user ID")
+
+            val user = userSchema.getUserById(userId)
+            if (user != null) {
+                // Respond with the DTO object
+                call.respond(HttpStatusCode.OK, UsernameResponse(username = user.username))
+            } else {
+                call.respond(HttpStatusCode.NotFound, "User not found")
+            }
         }
 
         get("/users/fetch/{userId}/avatar") {

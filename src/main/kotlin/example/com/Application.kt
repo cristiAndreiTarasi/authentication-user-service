@@ -14,9 +14,11 @@ import example.com.services.token.TokenConfig
 import example.com.services.token.TokenService
 import io.ktor.server.application.*
 import io.ktor.server.netty.*
+import io.ktor.server.websocket.DefaultWebSocketServerSession
 import org.litote.kmongo.KMongo
 import java.sql.Connection
 import java.time.Duration
+import java.util.concurrent.ConcurrentHashMap
 
 fun main(args: Array<String>): Unit = EngineMain.main(args)
 
@@ -44,9 +46,11 @@ fun Application.module() {
     val tagSchema = TagSchema(postgresConnection)
     val streamSchema = StreamSchema(postgresConnection, categorySchema, tagSchema, gridFsService)
 
+    val streamSessionsMap = ConcurrentHashMap<String, MutableList<DefaultWebSocketServerSession>>()
+
     configureSerialization()
     configureHTTP()
-    configureSockets(tokenService, roleService)
+    configureSockets(tokenService, streamSessionsMap)
     configureSecurity()
     configureRouting(
         userSchema,

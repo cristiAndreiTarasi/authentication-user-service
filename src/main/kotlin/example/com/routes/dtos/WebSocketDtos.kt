@@ -6,27 +6,40 @@ import kotlinx.serialization.Serializable
 @Serializable
 sealed class BroadcastEvent {
     abstract val type: String
-
-    @Serializable
-    @SerialName("chat_message")
-    data class ChatMessage(
-        override val type: String = "chat_message",
-        val userId: String,
-        val message: String
-    ) : BroadcastEvent()
-
-    @Serializable
-    @SerialName("like_update")
-    data class LikeUpdate(
-        override val type: String = "like_update",
-        val newCount: Int
-    ) : BroadcastEvent()
-
-    @Serializable
-    @SerialName("visitor_count_update")
-    data class VisitorCountUpdate(
-        override val type: String = "visitor_count_update",
-        val currentCount: Int
-    ) : BroadcastEvent()
 }
+
+@Serializable
+@SerialName("chat_message")
+data class ChatMessage(
+    override val type: String = "chat_message",
+    val userId: String,
+    val message: String
+) : BroadcastEvent()
+
+@Serializable
+@SerialName("like_update")
+data class LikeUpdate(
+    override val type: String = "like_update",
+    val newCount: Int
+) : BroadcastEvent()
+
+@Serializable
+@SerialName("visitor_count_update")
+data class VisitorCountUpdate(
+    override val type: String = "visitor_count_update",
+    val currentCount: Int
+) : BroadcastEvent()
+
+@Serializable
+@SerialName("publisher_info")
+data class PublisherInfo(
+    override val type: String = "publisher_info",
+    val userId: String
+) : BroadcastEvent()
+
+@Serializable
+@SerialName("publisher_disconnected")
+data class PublisherDisconnected(
+    override val type: String = "publisher_disconnected"
+) : BroadcastEvent()
 

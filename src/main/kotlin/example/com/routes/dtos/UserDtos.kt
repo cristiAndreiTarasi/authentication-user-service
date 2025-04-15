@@ -27,3 +27,9 @@ data class UpdateBioDto(val bio: String)
 
 @Serializable
 data class UpdateOccupationDto(val occupation: String)
+
+@Serializable
+data class UsernameResponse(
+    val username: String
+)
+
