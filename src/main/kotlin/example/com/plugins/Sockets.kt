@@ -5,6 +5,7 @@ import example.com.routes.dtos.ChatMessageOut
 import example.com.routes.dtos.LikeUpdate
 import example.com.routes.dtos.PublisherDisconnected
 import example.com.routes.dtos.PublisherInfo
+import example.com.routes.dtos.UserJoined
 import example.com.routes.dtos.VisitorCountUpdate
 import example.com.schemas.ExposedUser
 import example.com.schemas.UserSchema
@@ -84,8 +85,7 @@ fun Application.configureSockets(
             val likeCh = likeChannel(streamId)
             val visCh = visitorChannel(streamId)
 
-            // Get the shared sessions list for this stream.
-            // If not exists, create a new thread-safe list.
+            // Track all sessions for this stream
             val sessions = streamSessionsMap.getOrPut(streamId) {
                 Collections.synchronizedList(mutableListOf())
             }
@@ -93,18 +93,25 @@ fun Application.configureSockets(
 
             val commandJedis = jedisPool.resource
 
-            // Store publisher info
+            // Connection logic
             if (isStreamer) {
-                // For publisher: store publisher info and initialize counters.
+                // New streamer: store their userId and reset counters
                 commandJedis.hmset(pubKey, mapOf("userId" to userId))
                 commandJedis.set(visCountKey, "0")
                 commandJedis.set(lCountKey, "0")
             } else {
                 // For viewers: increment visitor count.
+                // ── A viewer just connected ──
                 commandJedis.incr(visCountKey)
                 val currentCount = commandJedis.get(visCountKey).toInt()
                 val visitorEvent = VisitorCountUpdate(currentCount = currentCount)
                 commandJedis.publish(visCh, Json.encodeToString(visitorEvent))
+
+                // Publish “X joined the chat” as a system event
+                val user     = userSchema.findById(userId.toInt())
+                 val username = user?.username ?: "Unknown"
+                val joined   = UserJoined(userId = userId, username = username)
+                commandJedis.publish(chatCh, Json.encodeToString(joined))
 
                 // Additionally, fetch and publish the current like count.
                 val currentLikeCount = commandJedis.get(lCountKey).toInt()
@@ -112,8 +119,8 @@ fun Application.configureSockets(
                 commandJedis.publish(likeCh, Json.encodeToString(likeUpdate))
             }
 
+            // If I’m a viewer, immediately send publisher info
             if (!isStreamer) {
-                // For visitors: read publisher info from Redis and send to this client.
                 val publisherInfo = commandJedis.hgetAll(pubKey)
                 val publisherId = publisherInfo["userId"]
                 if (publisherId != null) {
@@ -122,11 +129,10 @@ fun Application.configureSockets(
                 }
             }
 
+            // Subscribe once per stream to fan out messages
             var pubSubJedis: Jedis? = null
             var pubSub: JedisPubSub? = null
-
             if (streamSubscribersMap.putIfAbsent(streamId, true) == null) {
-                // First time we ever need to subscribe for this stream:
                 pubSub = object : JedisPubSub() {
                     override fun onMessage(channel: String, message: String) {
                         GlobalScope.launch {
@@ -155,6 +161,7 @@ fun Application.configureSockets(
                 }
             }
 
+            // Incoming‑frame loop
             try {
                 for (frame in incoming) {
                     if (frame is Frame.Text) {
@@ -166,23 +173,16 @@ fun Application.configureSockets(
                                 commandJedis.publish(likeCh, Json.encodeToString(likeUpdate))
                             }
                             else -> {
-                                // 1) decode the thin payload
                                 val incomingChat = Json.decodeFromString(
                                     ChatMessageIn.serializer(), text
                                 )
 
-                                // 2) look the user up in your UserSchema
-                                val user: ExposedUser? = userSchema.findById(incomingChat.userId.toInt())
-                                val username = user?.username ?: incomingChat.userId
-
-                                // 3) build the enriched outgoing event
                                 val enriched = ChatMessageOut(
                                     userId   = incomingChat.userId,
                                     username = incomingChat.username,
                                     message  = incomingChat.message
                                 )
 
-                                // 4) publish that
                                 commandJedis.publish(chatCh, Json.encodeToString(enriched))
                             }
 
@@ -190,8 +190,8 @@ fun Application.configureSockets(
                     }
                 }
             } finally {
+                // Clean up this session
                 sessions.remove(this)
-                // If the shared sessions list is empty for this stream, remove it.
                 if (sessions.isEmpty()) {
                     streamSessionsMap.remove(streamId)
                     streamSubscribersMap.remove(streamId)
@@ -199,28 +199,32 @@ fun Application.configureSockets(
                     pubSubJedis?.close()
                 }
 
-                commandJedis.close()
+                // Viewer disconnect: decrement visitor count
+                if (!isStreamer) {
+                    val updated = commandJedis.decr(visCountKey).toInt()
+                    commandJedis.publish(visCh, Json.encodeToString(
+                        VisitorCountUpdate(currentCount = updated)
+                    ))
+                }
 
+                // Streamer disconnect: reset everything + notify
                 if (isStreamer) {
-                    // When the publisher disconnects: reset counters and remove publisher info.
                     commandJedis.set(visCountKey, "0")
                     commandJedis.set(lCountKey, "0")
                     commandJedis.del(pubKey)
-                    val resetVisitorEvent = VisitorCountUpdate(currentCount = 0)
-                    commandJedis.publish(visCh, Json.encodeToString(resetVisitorEvent))
-                    val likeResetEvent = LikeUpdate(newCount = 0)
-                    commandJedis.publish(likeCh, Json.encodeToString(likeResetEvent))
-                } else {
-                    // For a viewer disconnect: decrement the visitor counter.
-                    commandJedis.decr(visCountKey)
-                    val updatedCount = commandJedis.get(visCountKey).toInt()
-                    val leaveEvent = VisitorCountUpdate(currentCount = updatedCount)
-                    commandJedis.publish(visCh, Json.encodeToString(leaveEvent))
 
-                    // Publish special event indicating publisher disconnected
-                    val publisherDisconnectEvent = PublisherDisconnected()
-                    commandJedis.publish(visCh, Json.encodeToString(publisherDisconnectEvent))
+                    commandJedis.publish(visCh, Json.encodeToString(
+                        VisitorCountUpdate(currentCount = 0)
+                    ))
+                    commandJedis.publish(likeCh, Json.encodeToString(
+                        LikeUpdate(newCount = 0)
+                    ))
+                    commandJedis.publish(visCh, Json.encodeToString(
+                        PublisherDisconnected()
+                    ))
                 }
+
+                commandJedis.close()
             }
         }
     }

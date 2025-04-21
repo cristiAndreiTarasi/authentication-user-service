@@ -1,5 +1,6 @@
 package example.com.routes.dtos
 
+import kotlinx.serialization.Required
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
@@ -53,4 +54,13 @@ data class PublisherInfo(
 data class PublisherDisconnected(
     override val type: String = "publisher_disconnected"
 ) : BroadcastEvent()
+
+@Serializable
+@SerialName("user_joined")
+data class UserJoined(
+    @Required override val type: String = "user_joined",
+    val userId: String,
+    val username: String
+) : BroadcastEvent()
+
 
