@@ -1,11 +1,13 @@
 package example.com.plugins
 
-import example.com.routes.dtos.BroadcastEvent
-import example.com.routes.dtos.ChatMessage
+import example.com.routes.dtos.ChatMessageIn
+import example.com.routes.dtos.ChatMessageOut
 import example.com.routes.dtos.LikeUpdate
 import example.com.routes.dtos.PublisherDisconnected
 import example.com.routes.dtos.PublisherInfo
 import example.com.routes.dtos.VisitorCountUpdate
+import example.com.schemas.ExposedUser
+import example.com.schemas.UserSchema
 import example.com.services.token.TokenService
 import io.ktor.server.application.Application
 import io.ktor.server.application.install
@@ -25,6 +27,7 @@ import kotlinx.coroutines.GlobalScope
 import kotlinx.coroutines.launch
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import redis.clients.jedis.Jedis
 import redis.clients.jedis.JedisPool
 import redis.clients.jedis.JedisPubSub
 import java.time.Duration
@@ -33,8 +36,10 @@ import java.util.concurrent.ConcurrentHashMap
 
 @OptIn(DelicateCoroutinesApi::class)
 fun Application.configureSockets(
+    userSchema: UserSchema,
     tokenService: TokenService,
-    streamSessionsMap: ConcurrentHashMap<String, MutableList<DefaultWebSocketServerSession>>
+    streamSessionsMap: ConcurrentHashMap<String, MutableList<DefaultWebSocketServerSession>>,
+    streamSubscribersMap: ConcurrentHashMap<String, Boolean>
 ) {
     install(WebSockets) {
         pingPeriod = Duration.ofSeconds(15)
@@ -92,7 +97,6 @@ fun Application.configureSockets(
             if (isStreamer) {
                 // For publisher: store publisher info and initialize counters.
                 commandJedis.hmset(pubKey, mapOf("userId" to userId))
-                println("Stored publisher info for stream $streamId: userId=$userId")
                 commandJedis.set(visCountKey, "0")
                 commandJedis.set(lCountKey, "0")
             } else {
@@ -118,28 +122,37 @@ fun Application.configureSockets(
                 }
             }
 
-            // Set up a per-stream Pub/Sub using the global sessions list.
-            val pubSub = object : JedisPubSub() {
-                override fun onMessage(channel: String, message: String) {
-                    GlobalScope.launch {
-                        // Send the message to every session in the shared list.
-                        val deadSessions = mutableListOf<DefaultWebSocketServerSession>()
-                        sessions.forEach { session ->
-                            try {
-                                session.outgoing.send(Frame.Text(message))
-                            } catch (e: Exception) {
-                                deadSessions.add(session)
+            var pubSubJedis: Jedis? = null
+            var pubSub: JedisPubSub? = null
+
+            if (streamSubscribersMap.putIfAbsent(streamId, true) == null) {
+                // First time we ever need to subscribe for this stream:
+                pubSub = object : JedisPubSub() {
+                    override fun onMessage(channel: String, message: String) {
+                        GlobalScope.launch {
+                            val dead = mutableListOf<DefaultWebSocketServerSession>()
+                            // Fan out to *all* sessions of this stream
+                            streamSessionsMap[streamId]?.forEach { sess ->
+                                try {
+                                    sess.outgoing.send(Frame.Text(message))
+                                } catch (e: Exception) {
+                                    dead.add(sess)
+                                }
                             }
+                            streamSessionsMap[streamId]?.removeAll(dead)
                         }
-                        sessions.removeAll(deadSessions)
                     }
                 }
-            }
-
-            // Launch a subscriber for this stream's channels.
-            val pubSubJedis = jedisPool.resource
-            launch(Dispatchers.IO) {
-                pubSubJedis.subscribe(pubSub, chatCh, likeCh, visCh)
+                pubSubJedis = jedisPool.resource
+                launch(Dispatchers.IO) {
+                    try {
+                        pubSubJedis.subscribe(pubSub, chatCh, likeCh, visCh)
+                    } catch (e: Exception) {
+                        // Cleanup if subscribe fails
+                        streamSubscribersMap.remove(streamId)
+                        pubSubJedis.close()
+                    }
+                }
             }
 
             try {
@@ -153,9 +166,26 @@ fun Application.configureSockets(
                                 commandJedis.publish(likeCh, Json.encodeToString(likeUpdate))
                             }
                             else -> {
-                                val chatMessage = Json.decodeFromString(ChatMessage.serializer(), text)
-                                commandJedis.publish(chatCh, Json.encodeToString(chatMessage))
+                                // 1) decode the thin payload
+                                val incomingChat = Json.decodeFromString(
+                                    ChatMessageIn.serializer(), text
+                                )
+
+                                // 2) look the user up in your UserSchema
+                                val user: ExposedUser? = userSchema.findById(incomingChat.userId.toInt())
+                                val username = user?.username ?: incomingChat.userId
+
+                                // 3) build the enriched outgoing event
+                                val enriched = ChatMessageOut(
+                                    userId   = incomingChat.userId,
+                                    username = incomingChat.username,
+                                    message  = incomingChat.message
+                                )
+
+                                // 4) publish that
+                                commandJedis.publish(chatCh, Json.encodeToString(enriched))
                             }
+
                         }
                     }
                 }
@@ -164,7 +194,13 @@ fun Application.configureSockets(
                 // If the shared sessions list is empty for this stream, remove it.
                 if (sessions.isEmpty()) {
                     streamSessionsMap.remove(streamId)
+                    streamSubscribersMap.remove(streamId)
+                    pubSub?.unsubscribe()
+                    pubSubJedis?.close()
                 }
+
+                commandJedis.close()
+
                 if (isStreamer) {
                     // When the publisher disconnects: reset counters and remove publisher info.
                     commandJedis.set(visCountKey, "0")
@@ -185,13 +221,7 @@ fun Application.configureSockets(
                     val publisherDisconnectEvent = PublisherDisconnected()
                     commandJedis.publish(visCh, Json.encodeToString(publisherDisconnectEvent))
                 }
-                pubSub.unsubscribe()
-                commandJedis.close()
-                pubSubJedis.close()
             }
         }
     }
 }
-
-
-

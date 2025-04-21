@@ -9,11 +9,22 @@ sealed class BroadcastEvent {
 }
 
 @Serializable
-@SerialName("chat_message")
-data class ChatMessage(
+@SerialName("chat_message_in")
+data class ChatMessageIn(
     override val type: String = "chat_message",
-    val userId: String,
-    val message: String
+    val userId:   String,
+    val username: String,
+    val message:  String
+) : BroadcastEvent()
+
+// this is what we send _to_ every client
+@Serializable
+@SerialName("chat_message")
+data class ChatMessageOut(
+    override val type: String = "chat_message",
+    val userId:    String,
+    val username:  String,
+    val message:   String
 ) : BroadcastEvent()
 
 @Serializable
