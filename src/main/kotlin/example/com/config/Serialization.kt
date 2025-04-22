@@ -87,3 +87,4 @@ object ByteArrayAsBase64Serializer : KSerializer<ByteArray> {
         return Base64.getDecoder().decode(encoded)
     }
 }
+

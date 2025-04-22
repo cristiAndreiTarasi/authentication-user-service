@@ -63,4 +63,68 @@ data class UserJoined(
     val username: String
 ) : BroadcastEvent()
 
+@Serializable @SerialName("kick_user")
+data class KickUserEvent(
+    override val type: String = "kick_user",
+    val targetUserId: String,
+    val reason: String? = null
+) : BroadcastEvent()
+
+@Serializable @SerialName("kick_user_in")
+data class KickUserIn(
+    override val type: String = "kick_user",
+    val targetUserId: String
+): BroadcastEvent()
+
+@Serializable @SerialName("mute_user")
+data class MuteUserEvent(
+    override val type: String = "mute_user",
+    val targetUserId: String,
+    val durationMs: Long
+) : BroadcastEvent()
+
+@Serializable @SerialName("mute_user_in")
+data class MuteUserIn(
+    override val type: String = "mute_user",
+    val targetUserId: String,
+    val durationMs: Long
+): BroadcastEvent()
+
+@Serializable @SerialName("grant_moderator_in")
+data class GrantModeratorIn(
+    override val type: String = "grant_moderator",
+    val targetUserId: String
+) : BroadcastEvent()
+
+@Serializable @SerialName("revoke_moderator_in")
+data class RevokeModeratorIn(
+    override val type: String = "revoke_moderator",
+    val targetUserId: String
+) : BroadcastEvent()
+
+@Serializable @SerialName("moderator_granted")
+data class ModeratorGranted(
+    override val type: String = "moderator_granted",
+    val targetUserId: String
+) : BroadcastEvent()
+
+@Serializable @SerialName("moderator_revoked")
+data class ModeratorRevoked(
+    override val type: String = "moderator_revoked",
+    val targetUserId: String
+) : BroadcastEvent()
+
+@Serializable @SerialName("unmute_user")
+data class UnmuteUserEvent(
+    override val type: String = "unmute_user",
+    val targetUserId: String
+) : BroadcastEvent()
+
+@Serializable @SerialName("unmute_user_in")
+data class UnmuteUserIn(
+    override val type: String = "unmute_user",
+    val targetUserId: String
+) : BroadcastEvent()
+
+
 

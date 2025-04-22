@@ -1,13 +1,23 @@
 package example.com.plugins
 
+import example.com.routes.dtos.BroadcastEvent
 import example.com.routes.dtos.ChatMessageIn
 import example.com.routes.dtos.ChatMessageOut
+import example.com.routes.dtos.GrantModeratorIn
+import example.com.routes.dtos.KickUserEvent
+import example.com.routes.dtos.KickUserIn
 import example.com.routes.dtos.LikeUpdate
+import example.com.routes.dtos.ModeratorGranted
+import example.com.routes.dtos.ModeratorRevoked
+import example.com.routes.dtos.MuteUserEvent
+import example.com.routes.dtos.MuteUserIn
 import example.com.routes.dtos.PublisherDisconnected
 import example.com.routes.dtos.PublisherInfo
+import example.com.routes.dtos.RevokeModeratorIn
+import example.com.routes.dtos.UnmuteUserEvent
+import example.com.routes.dtos.UnmuteUserIn
 import example.com.routes.dtos.UserJoined
 import example.com.routes.dtos.VisitorCountUpdate
-import example.com.schemas.ExposedUser
 import example.com.schemas.UserSchema
 import example.com.services.token.TokenService
 import io.ktor.server.application.Application
@@ -28,6 +38,8 @@ import kotlinx.coroutines.GlobalScope
 import kotlinx.coroutines.launch
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import redis.clients.jedis.Jedis
 import redis.clients.jedis.JedisPool
 import redis.clients.jedis.JedisPubSub
@@ -56,6 +68,7 @@ fun Application.configureSockets(
 
     // Keys and channels (scoped per stream).
     // These keys will be built using the stream ID.
+    fun rolesKey(streamId: String) = "stream:$streamId:roles"
     fun publisherKey(streamId: String) = "stream:$streamId:publisher"
     fun visitorCountKey(streamId: String) = "stream:$streamId:visitors"
     fun likeCountKey(streamId: String) = "stream:$streamId:likes"
@@ -63,6 +76,17 @@ fun Application.configureSockets(
     fun chatChannel(streamId: String) = "stream:$streamId:chat"
     fun likeChannel(streamId: String) = "stream:$streamId:like"
     fun visitorChannel(streamId: String) = "stream:$streamId:visitors"
+
+    // Simple rank mapping
+    fun rank(role: String) = when(role) {
+        "publisher" -> 3
+        "moderator" -> 2
+        else -> 1 // viewer or unknown
+    }
+
+    suspend fun DefaultWebSocketServerSession.sendSerialized(event: BroadcastEvent) {
+        send(Frame.Text(Json.encodeToString(BroadcastEvent.serializer(), event)))
+    }
 
     routing {
         webSocket("/ws") {
@@ -77,6 +101,7 @@ fun Application.configureSockets(
                 return@webSocket
             }
 
+            val rolesRedisKey = rolesKey(streamId)
             val pubKey = publisherKey(streamId)
             val visCountKey = visitorCountKey(streamId)
             val lCountKey = likeCountKey(streamId)
@@ -97,6 +122,7 @@ fun Application.configureSockets(
             if (isStreamer) {
                 // New streamer: store their userId and reset counters
                 commandJedis.hmset(pubKey, mapOf("userId" to userId))
+                commandJedis.expire(rolesRedisKey, /* TTL until stream end */ 3600)
                 commandJedis.set(visCountKey, "0")
                 commandJedis.set(lCountKey, "0")
             } else {
@@ -164,28 +190,88 @@ fun Application.configureSockets(
             // Incoming‑frame loop
             try {
                 for (frame in incoming) {
-                    if (frame is Frame.Text) {
-                        val text = frame.readText()
-                        when {
-                            text.contains("\"type\":\"like\"") -> {
-                                val newCount = commandJedis.incr(lCountKey)
-                                val likeUpdate = LikeUpdate(newCount = newCount.toInt())
-                                commandJedis.publish(likeCh, Json.encodeToString(likeUpdate))
-                            }
-                            else -> {
-                                val incomingChat = Json.decodeFromString(
-                                    ChatMessageIn.serializer(), text
+                    if (frame !is Frame.Text) continue
+
+                    val text = frame.readText()
+                    // Parse event type
+                    val json = Json.parseToJsonElement(text).jsonObject
+
+                    when(json["type"]?.jsonPrimitive?.content) {
+                        "chat_message" -> {
+                            val inc = Json.decodeFromString(ChatMessageIn.serializer(), text)
+                            val out = ChatMessageOut(
+                                userId = inc.userId,
+                                username = inc.username,
+                                message = inc.message
+                            )
+                            commandJedis.publish(chatCh, Json.encodeToString(out))
+                        }
+
+                        "like" -> {
+                            val newCount = commandJedis.incr(lCountKey).toInt()
+                            commandJedis.publish(likeCh, Json.encodeToString(LikeUpdate(newCount = newCount)))
+                        }
+
+                        "kick_user" -> {
+                            val cmd = Json.decodeFromString(KickUserIn.serializer(), text)
+                            val actorRole = commandJedis.hget(rolesRedisKey, userId) ?: "viewer"
+                            val targetRole = commandJedis.hget(rolesRedisKey, cmd.targetUserId) ?: "viewer"
+                            if (rank(actorRole) > rank(targetRole)) {
+                                sessions[cmd.targetUserId.toInt()].sendSerialized(
+                                    KickUserEvent(targetUserId = cmd.targetUserId, reason = "Kicked by moderator")
                                 )
-
-                                val enriched = ChatMessageOut(
-                                    userId   = incomingChat.userId,
-                                    username = incomingChat.username,
-                                    message  = incomingChat.message
+                                sessions[cmd.targetUserId.toInt()].close(
+                                    CloseReason(CloseReason.Codes.NORMAL, message = "Kicked by moderator")
                                 )
-
-                                commandJedis.publish(chatCh, Json.encodeToString(enriched))
                             }
+                        }
 
+                        "mute_user" -> {
+                            val cmd = Json.decodeFromString(MuteUserIn.serializer(), text)
+                            val actorRole = commandJedis.hget(rolesRedisKey, userId) ?: "viewer"
+                            val targetRole = commandJedis.hget(rolesRedisKey, cmd.targetUserId) ?: "viewer"
+                            if (rank(actorRole) > rank(targetRole)) {
+                                commandJedis.setex("muted:${cmd.targetUserId}", cmd.durationMs / 1000, "1")
+                                sessions[cmd.targetUserId.toInt()].sendSerialized(
+                                    MuteUserEvent(targetUserId = cmd.targetUserId, durationMs = cmd.durationMs)
+                                )
+                            }
+                        }
+
+                        "unmute_user" -> {
+                            val cmd = Json.decodeFromString(UnmuteUserIn.serializer(), text)
+                            val actorRole = commandJedis.hget(rolesRedisKey, userId) ?: "viewer"
+                            val targetRole = commandJedis.hget(rolesRedisKey, cmd.targetUserId) ?: "viewer"
+                            if (rank(actorRole) > rank(targetRole)) {
+                                commandJedis.del("muted:${cmd.targetUserId}")
+                                sessions[cmd.targetUserId.toInt()].sendSerialized(
+                                    UnmuteUserEvent(targetUserId = cmd.targetUserId)
+                                )
+                            }
+                        }
+
+                        "grant_moderator" -> {
+                            val cmd = Json.decodeFromString(GrantModeratorIn.serializer(), text)
+                            val actorRole = commandJedis.hget(rolesRedisKey, userId) ?: "viewer"
+                            val targetRole = commandJedis.hget(rolesRedisKey, cmd.targetUserId) ?: "viewer"
+                            if (rank(actorRole) > rank(targetRole)) {
+                                commandJedis.hset(rolesRedisKey, cmd.targetUserId, "moderator")
+                                sessions[cmd.targetUserId.toInt()].sendSerialized(
+                                    ModeratorGranted(targetUserId = cmd.targetUserId)
+                                )
+                            }
+                        }
+
+                        "revoke_moderator" -> {
+                            val cmd = Json.decodeFromString(RevokeModeratorIn.serializer(), text)
+                            val actorRole = commandJedis.hget(rolesRedisKey, userId) ?: "viewer"
+                            val targetRole = commandJedis.hget(rolesRedisKey, cmd.targetUserId) ?: "viewer"
+                            if (rank(actorRole) > rank(targetRole)) {
+                                commandJedis.hdel(rolesRedisKey, cmd.targetUserId)
+                                sessions[cmd.targetUserId.toInt()].sendSerialized(
+                                    ModeratorRevoked(targetUserId = cmd.targetUserId)
+                                )
+                            }
                         }
                     }
                 }
