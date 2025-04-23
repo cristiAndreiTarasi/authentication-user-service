@@ -1,5 +1,8 @@
 package example.com
 
+import io.ktor.http.ContentType.Application.Json
+import kotlinx.serialization.json.Json
+
 enum class PrivacyOptions(val displayName: String) {
     PUBLIC("Public"),
     PRIVATE("Private"),
@@ -27,4 +30,10 @@ enum class StreamAction(val actionName: String) {
 enum class PartDataItems(val displayName: String) {
     METADATA("metadata"),
     THUMBNAIL("thumbnail")
+}
+
+val WS_JSON = Json {
+    encodeDefaults    = true
+    ignoreUnknownKeys = true
+    classDiscriminator = "type"
 }

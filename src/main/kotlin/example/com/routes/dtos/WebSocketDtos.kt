@@ -102,15 +102,15 @@ data class RevokeModeratorIn(
     val targetUserId: String
 ) : BroadcastEvent()
 
-@Serializable @SerialName("moderator_granted")
-data class ModeratorGranted(
-    override val type: String = "moderator_granted",
+@Serializable @SerialName("grant_moderator")
+data class GrantModerator(
+    override val type: String = "grant_moderator",
     val targetUserId: String
 ) : BroadcastEvent()
 
-@Serializable @SerialName("moderator_revoked")
-data class ModeratorRevoked(
-    override val type: String = "moderator_revoked",
+@Serializable @SerialName("revoke_moderator")
+data class RevokeModerator(
+    override val type: String = "revoke_moderator",
     val targetUserId: String
 ) : BroadcastEvent()
 

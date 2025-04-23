@@ -1,18 +1,19 @@
 package example.com.plugins
 
+import example.com.WS_JSON
 import example.com.routes.dtos.BroadcastEvent
 import example.com.routes.dtos.ChatMessageIn
 import example.com.routes.dtos.ChatMessageOut
+import example.com.routes.dtos.GrantModerator
 import example.com.routes.dtos.GrantModeratorIn
 import example.com.routes.dtos.KickUserEvent
 import example.com.routes.dtos.KickUserIn
 import example.com.routes.dtos.LikeUpdate
-import example.com.routes.dtos.ModeratorGranted
-import example.com.routes.dtos.ModeratorRevoked
 import example.com.routes.dtos.MuteUserEvent
 import example.com.routes.dtos.MuteUserIn
 import example.com.routes.dtos.PublisherDisconnected
 import example.com.routes.dtos.PublisherInfo
+import example.com.routes.dtos.RevokeModerator
 import example.com.routes.dtos.RevokeModeratorIn
 import example.com.routes.dtos.UnmuteUserEvent
 import example.com.routes.dtos.UnmuteUserIn
@@ -85,7 +86,7 @@ fun Application.configureSockets(
     }
 
     suspend fun DefaultWebSocketServerSession.sendSerialized(event: BroadcastEvent) {
-        send(Frame.Text(Json.encodeToString(BroadcastEvent.serializer(), event)))
+        send(Frame.Text(WS_JSON.encodeToString(BroadcastEvent.serializer(), event)))
     }
 
     routing {
@@ -131,18 +132,18 @@ fun Application.configureSockets(
                 commandJedis.incr(visCountKey)
                 val currentCount = commandJedis.get(visCountKey).toInt()
                 val visitorEvent = VisitorCountUpdate(currentCount = currentCount)
-                commandJedis.publish(visCh, Json.encodeToString(visitorEvent))
+                commandJedis.publish(visCh, WS_JSON.encodeToString(visitorEvent))
 
                 // Publish “X joined the chat” as a system event
                 val user     = userSchema.findById(userId.toInt())
                  val username = user?.username ?: "Unknown"
                 val joined   = UserJoined(userId = userId, username = username)
-                commandJedis.publish(chatCh, Json.encodeToString(joined))
+                commandJedis.publish(chatCh, WS_JSON.encodeToString(joined))
 
                 // Additionally, fetch and publish the current like count.
                 val currentLikeCount = commandJedis.get(lCountKey).toInt()
                 val likeUpdate = LikeUpdate(newCount = currentLikeCount)
-                commandJedis.publish(likeCh, Json.encodeToString(likeUpdate))
+                commandJedis.publish(likeCh, WS_JSON.encodeToString(likeUpdate))
             }
 
             // If I’m a viewer, immediately send publisher info
@@ -151,7 +152,7 @@ fun Application.configureSockets(
                 val publisherId = publisherInfo["userId"]
                 if (publisherId != null) {
                     val publisherEvent = PublisherInfo(userId = publisherId)
-                    outgoing.send(Frame.Text(Json.encodeToString(publisherEvent)))
+                    outgoing.send(Frame.Text(WS_JSON.encodeToString(publisherEvent)))
                 }
             }
 
@@ -194,26 +195,26 @@ fun Application.configureSockets(
 
                     val text = frame.readText()
                     // Parse event type
-                    val json = Json.parseToJsonElement(text).jsonObject
+                    val json = WS_JSON.parseToJsonElement(text).jsonObject
 
                     when(json["type"]?.jsonPrimitive?.content) {
                         "chat_message" -> {
-                            val inc = Json.decodeFromString(ChatMessageIn.serializer(), text)
+                            val inc = WS_JSON.decodeFromString(ChatMessageIn.serializer(), text)
                             val out = ChatMessageOut(
                                 userId = inc.userId,
                                 username = inc.username,
                                 message = inc.message
                             )
-                            commandJedis.publish(chatCh, Json.encodeToString(out))
+                            commandJedis.publish(chatCh, WS_JSON.encodeToString(out))
                         }
 
                         "like" -> {
                             val newCount = commandJedis.incr(lCountKey).toInt()
-                            commandJedis.publish(likeCh, Json.encodeToString(LikeUpdate(newCount = newCount)))
+                            commandJedis.publish(likeCh, WS_JSON.encodeToString(LikeUpdate(newCount = newCount)))
                         }
 
                         "kick_user" -> {
-                            val cmd = Json.decodeFromString(KickUserIn.serializer(), text)
+                            val cmd = WS_JSON.decodeFromString(KickUserIn.serializer(), text)
                             val actorRole = commandJedis.hget(rolesRedisKey, userId) ?: "viewer"
                             val targetRole = commandJedis.hget(rolesRedisKey, cmd.targetUserId) ?: "viewer"
                             if (rank(actorRole) > rank(targetRole)) {
@@ -227,7 +228,7 @@ fun Application.configureSockets(
                         }
 
                         "mute_user" -> {
-                            val cmd = Json.decodeFromString(MuteUserIn.serializer(), text)
+                            val cmd = WS_JSON.decodeFromString(MuteUserIn.serializer(), text)
                             val actorRole = commandJedis.hget(rolesRedisKey, userId) ?: "viewer"
                             val targetRole = commandJedis.hget(rolesRedisKey, cmd.targetUserId) ?: "viewer"
                             if (rank(actorRole) > rank(targetRole)) {
@@ -239,7 +240,7 @@ fun Application.configureSockets(
                         }
 
                         "unmute_user" -> {
-                            val cmd = Json.decodeFromString(UnmuteUserIn.serializer(), text)
+                            val cmd = WS_JSON.decodeFromString(UnmuteUserIn.serializer(), text)
                             val actorRole = commandJedis.hget(rolesRedisKey, userId) ?: "viewer"
                             val targetRole = commandJedis.hget(rolesRedisKey, cmd.targetUserId) ?: "viewer"
                             if (rank(actorRole) > rank(targetRole)) {
@@ -251,25 +252,25 @@ fun Application.configureSockets(
                         }
 
                         "grant_moderator" -> {
-                            val cmd = Json.decodeFromString(GrantModeratorIn.serializer(), text)
+                            val cmd = WS_JSON.decodeFromString(GrantModeratorIn.serializer(), text)
                             val actorRole = commandJedis.hget(rolesRedisKey, userId) ?: "viewer"
                             val targetRole = commandJedis.hget(rolesRedisKey, cmd.targetUserId) ?: "viewer"
                             if (rank(actorRole) > rank(targetRole)) {
                                 commandJedis.hset(rolesRedisKey, cmd.targetUserId, "moderator")
                                 sessions[cmd.targetUserId.toInt()].sendSerialized(
-                                    ModeratorGranted(targetUserId = cmd.targetUserId)
+                                    GrantModerator(targetUserId = cmd.targetUserId)
                                 )
                             }
                         }
 
                         "revoke_moderator" -> {
-                            val cmd = Json.decodeFromString(RevokeModeratorIn.serializer(), text)
+                            val cmd = WS_JSON.decodeFromString(RevokeModeratorIn.serializer(), text)
                             val actorRole = commandJedis.hget(rolesRedisKey, userId) ?: "viewer"
                             val targetRole = commandJedis.hget(rolesRedisKey, cmd.targetUserId) ?: "viewer"
                             if (rank(actorRole) > rank(targetRole)) {
                                 commandJedis.hdel(rolesRedisKey, cmd.targetUserId)
                                 sessions[cmd.targetUserId.toInt()].sendSerialized(
-                                    ModeratorRevoked(targetUserId = cmd.targetUserId)
+                                    RevokeModerator(targetUserId = cmd.targetUserId)
                                 )
                             }
                         }
@@ -288,7 +289,7 @@ fun Application.configureSockets(
                 // Viewer disconnect: decrement visitor count
                 if (!isStreamer) {
                     val updated = commandJedis.decr(visCountKey).toInt()
-                    commandJedis.publish(visCh, Json.encodeToString(
+                    commandJedis.publish(visCh, WS_JSON.encodeToString(
                         VisitorCountUpdate(currentCount = updated)
                     ))
                 }
@@ -299,13 +300,13 @@ fun Application.configureSockets(
                     commandJedis.set(lCountKey, "0")
                     commandJedis.del(pubKey)
 
-                    commandJedis.publish(visCh, Json.encodeToString(
+                    commandJedis.publish(visCh, WS_JSON.encodeToString(
                         VisitorCountUpdate(currentCount = 0)
                     ))
-                    commandJedis.publish(likeCh, Json.encodeToString(
+                    commandJedis.publish(likeCh, WS_JSON.encodeToString(
                         LikeUpdate(newCount = 0)
                     ))
-                    commandJedis.publish(visCh, Json.encodeToString(
+                    commandJedis.publish(visCh, WS_JSON.encodeToString(
                         PublisherDisconnected()
                     ))
                 }
