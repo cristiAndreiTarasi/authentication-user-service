@@ -1,5 +1,6 @@
 package example.com.routes.dtos
 
+import io.ktor.server.websocket.DefaultWebSocketServerSession
 import kotlinx.serialization.Required
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
@@ -126,5 +127,9 @@ data class UnmuteUserIn(
     val targetUserId: String
 ) : BroadcastEvent()
 
+data class UserSession(
+    val wsSession: DefaultWebSocketServerSession,
+    val userId: String
+)
 
 

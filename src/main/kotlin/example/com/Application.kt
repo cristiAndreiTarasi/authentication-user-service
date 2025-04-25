@@ -2,6 +2,7 @@ package example.com
 
 import example.com.config.Constants
 import example.com.plugins.*
+import example.com.routes.dtos.UserSession
 import example.com.schemas.CategorySchema
 import example.com.schemas.StreamSchema
 import example.com.schemas.TagSchema
@@ -46,7 +47,7 @@ fun Application.module() {
     val tagSchema = TagSchema(postgresConnection)
     val streamSchema = StreamSchema(postgresConnection, categorySchema, tagSchema, gridFsService)
 
-    val streamSessionsMap = ConcurrentHashMap<String, MutableList<DefaultWebSocketServerSession>>()
+    val streamSessionsMap = ConcurrentHashMap<String, MutableList<UserSession>>()
     val streamSubscribersMap = ConcurrentHashMap<String, Boolean>()
 
     configureSerialization()

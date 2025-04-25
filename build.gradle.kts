@@ -55,5 +55,5 @@ dependencies {
 
     implementation(libs.ktor.server.websockets)
 
-    implementation("redis.clients:jedis:5.1.0")
+    implementation("io.lettuce:lettuce-core:6.5.0.RELEASE")
 }
