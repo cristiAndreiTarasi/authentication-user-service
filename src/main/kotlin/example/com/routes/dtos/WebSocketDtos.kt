@@ -92,31 +92,20 @@ data class MuteUserIn(
 ): BroadcastEvent()
 
 @Serializable @SerialName("grant_moderator_in")
-data class GrantModeratorIn(
+data class GrantModeratorIn( // Same type as client's GrantModerator
     override val type: String = "grant_moderator",
     val targetUserId: String
 ) : BroadcastEvent()
 
 @Serializable @SerialName("revoke_moderator_in")
-data class RevokeModeratorIn(
+data class RevokeModeratorIn( // Same type as client's RevokeModerator
     override val type: String = "revoke_moderator",
     val targetUserId: String
 ) : BroadcastEvent()
 
-@Serializable @SerialName("grant_moderator")
-data class GrantModerator(
-    override val type: String = "grant_moderator",
-    val targetUserId: String
-) : BroadcastEvent()
-
-@Serializable @SerialName("revoke_moderator")
-data class RevokeModerator(
-    override val type: String = "revoke_moderator",
-    val targetUserId: String
-) : BroadcastEvent()
 
 @Serializable @SerialName("unmute_user")
-data class UnmuteUserEvent(
+data class UserUnmuted(
     override val type: String = "unmute_user",
     val targetUserId: String
 ) : BroadcastEvent()
@@ -132,4 +121,38 @@ data class UserSession(
     val userId: String
 )
 
+@Serializable @SerialName("moderator_granted")
+data class ModeratorGranted(
+    override val type: String = "moderator_granted",
+    val targetUserId: String
+) : BroadcastEvent()
 
+@Serializable @SerialName("moderator_revoked")
+data class ModeratorRevoked(
+    override val type: String = "moderator_revoked",
+    val targetUserId: String
+) : BroadcastEvent()
+
+// Add targetUserId to both events
+@Serializable @SerialName("user_muted")
+data class UserMuted(
+    override val type: String = "user_muted",
+    val targetUserId: String,  // Added field
+    val durationMs: Long
+) : BroadcastEvent()
+
+@Serializable @SerialName("user_kicked")
+data class UserKicked(
+    override val type: String = "user_kicked",
+    val targetUserId: String,  // Added field
+    val reason: String? = null
+) : BroadcastEvent()
+
+@Serializable @SerialName("moderator_action_success")
+data class ModeratorActionSuccess(
+    override val type: String = "moderator_action_success",
+    val action: String, // "grant", "revoke", "mute", "unmute", "kick"
+    val targetUserId: String,
+    val targetUsername: String,
+    val durationMs: Long? = null
+) : BroadcastEvent()
