@@ -438,9 +438,24 @@ fun Application.configureSockets(
                     commands.set(visCountKey, "0")
                     commands.set(lCountKey, "0")
                     commands.del(pubKey)
+
+                    // Notify all visitors first
+                    val dead = mutableListOf<UserSession>()
+                    sessions.forEach { session ->
+                        try {
+                            if (session.userId != userId) { // Don't disconnect ourselves
+                                session.wsSession.send(Frame.Text(WS_JSON.encodeToString(PublisherDisconnected())))
+                                session.wsSession.close()
+                                dead.add(session)
+                            }
+                        } catch (e: Exception) {
+                            dead.add(session)
+                        }
+                    }
+                    removeDeadSessions(sessions, dead)
+
                     commands.publish(visCh, WS_JSON.encodeToString(VisitorCountUpdate(currentCount = 0)))
                     commands.publish(likeCh, WS_JSON.encodeToString(LikeUpdate(newCount =0)))
-                    commands.publish(visCh, WS_JSON.encodeToString(PublisherDisconnected()))
                 }
             }
         }
