@@ -1,26 +1,26 @@
 package example.com.plugins
 
 import example.com.WS_JSON
-import example.com.routes.dtos.BroadcastEvent
-import example.com.routes.dtos.ChatMessageIn
-import example.com.routes.dtos.ChatMessageOut
-import example.com.routes.dtos.GrantModeratorIn
-import example.com.routes.dtos.KickUserIn
-import example.com.routes.dtos.LikeUpdate
-import example.com.routes.dtos.ModeratorActionSuccess
-import example.com.routes.dtos.ModeratorGranted
-import example.com.routes.dtos.ModeratorRevoked
-import example.com.routes.dtos.MuteUserIn
-import example.com.routes.dtos.PublisherDisconnected
-import example.com.routes.dtos.PublisherInfo
-import example.com.routes.dtos.RevokeModeratorIn
-import example.com.routes.dtos.UnmuteUserIn
-import example.com.routes.dtos.UserJoined
-import example.com.routes.dtos.UserKicked
-import example.com.routes.dtos.UserMuted
+import example.com.routes.dtos.ChatMessageCommand
+import example.com.routes.dtos.ChatMessageEvent
+import example.com.routes.dtos.GrantModeratorCommand
+import example.com.routes.dtos.KickUserCommand
+import example.com.routes.dtos.LikeUpdateEvent
+import example.com.routes.dtos.ModeratorActionSuccessEvent
+import example.com.routes.dtos.ModeratorGrantedEvent
+import example.com.routes.dtos.ModeratorRevokedEvent
+import example.com.routes.dtos.MuteUserCommand
+import example.com.routes.dtos.PublisherDisconnectedEvent
+import example.com.routes.dtos.PublisherInfoEvent
+import example.com.routes.dtos.RevokeModeratorCommand
+import example.com.routes.dtos.UnmuteUserCommand
+import example.com.routes.dtos.UserJoinedEvent
+import example.com.routes.dtos.UserKickedEvent
+import example.com.routes.dtos.UserMutedEvent
 import example.com.routes.dtos.UserSession
-import example.com.routes.dtos.UserUnmuted
-import example.com.routes.dtos.VisitorCountUpdate
+import example.com.routes.dtos.UserUnmutedEvent
+import example.com.routes.dtos.VisitorCountEvent
+import example.com.routes.dtos.WsEvent
 import example.com.schemas.UserSchema
 import example.com.services.token.TokenService
 import io.ktor.server.application.Application
@@ -88,7 +88,7 @@ fun Application.configureSockets(
         else -> 1
     }
 
-    suspend fun DefaultWebSocketServerSession.sendSerialized(event: BroadcastEvent) {
+    suspend fun DefaultWebSocketServerSession.sendSerialized(event: WsEvent) {
         send(Frame.Text(WS_JSON.encodeToString(event)))
     }
 
@@ -142,21 +142,21 @@ fun Application.configureSockets(
             } else {
                 commands.incr(visCountKey)
                 val currentCount = commands.get(visCountKey).toInt()
-                commands.publish(visCh, WS_JSON.encodeToString(VisitorCountUpdate(currentCount = currentCount)))
+                commands.publish(visCh, WS_JSON.encodeToString(VisitorCountEvent(currentCount = currentCount)))
 
                 val user = userSchema.findById(userId.toInt())
                 val username = user?.username ?: "Unknown"
-                commands.publish(chatCh, WS_JSON.encodeToString(UserJoined(userId = userId, username = username)))
+                commands.publish(chatCh, WS_JSON.encodeToString(UserJoinedEvent(userId = userId, username = username)))
 
                 val currentLikeCount = commands.get(lCountKey).toInt()
-                commands.publish(likeCh, WS_JSON.encodeToString(LikeUpdate(newCount = currentLikeCount)))
+                commands.publish(likeCh, WS_JSON.encodeToString(LikeUpdateEvent(newCount = currentLikeCount)))
             }
 
             // Publisher info for viewers
             if (!isStreamer) {
                 val publisherId = commands.hget(pubKey, "userId")
                 publisherId?.let {
-                    send(Frame.Text(WS_JSON.encodeToString(PublisherInfo(userId = it))))
+                    send(Frame.Text(WS_JSON.encodeToString(PublisherInfoEvent(userId = it))))
                 }
             }
 
@@ -204,21 +204,21 @@ fun Application.configureSockets(
 
                     when(json["type"]?.jsonPrimitive?.content) {
                         "chat_message" -> {
-                            val msg = WS_JSON.decodeFromString<ChatMessageIn>(text)
+                            val msg = WS_JSON.decodeFromString<ChatMessageCommand>(text)
                             commands.publish(chatCh, WS_JSON.encodeToString(
-                                ChatMessageOut(userId = msg.userId, username = msg.username, message = msg.message)
+                                ChatMessageEvent(userId = msg.userId, username = msg.username, message = msg.message)
                             ))
                         }
 
                         "like" -> {
                             val newCount = commands.incr(lCountKey).toInt()
                             commands.publish(likeCh, WS_JSON.encodeToString(
-                                LikeUpdate(newCount = newCount)
+                                LikeUpdateEvent(newCount = newCount)
                             ))
                         }
 
                         "grant_moderator" -> {
-                            val cmd = WS_JSON.decodeFromString<GrantModeratorIn>(text)
+                            val cmd = WS_JSON.decodeFromString<GrantModeratorCommand>(text)
                             val actorRole = commands.hget(rolesRedisKey, userId) ?: "viewer"
                             val targetRole = commands.hget(rolesRedisKey, cmd.targetUserId) ?: "viewer"
                             val username = userSchema.findById(cmd.targetUserId.toInt())?.username ?: "Unknown"
@@ -233,7 +233,7 @@ fun Application.configureSockets(
                                     ?.forEach { session ->
                                         session.wsSession.send(
                                             Frame.Text(WS_JSON.encodeToString(
-                                                ModeratorActionSuccess(
+                                                ModeratorActionSuccessEvent(
                                                     action = "grant",
                                                     targetUserId = cmd.targetUserId,
                                                     targetUsername = username,
@@ -248,7 +248,7 @@ fun Application.configureSockets(
                                     ?.forEach { session ->
                                         session.wsSession.send(
                                             Frame.Text(WS_JSON.encodeToString(
-                                                ModeratorGranted(targetUserId = cmd.targetUserId)
+                                                ModeratorGrantedEvent(targetUserId = cmd.targetUserId)
                                             ))
                                         )
                                     }
@@ -256,7 +256,7 @@ fun Application.configureSockets(
                         }
 
                         "revoke_moderator" -> {
-                            val cmd = WS_JSON.decodeFromString<RevokeModeratorIn>(text)
+                            val cmd = WS_JSON.decodeFromString<RevokeModeratorCommand>(text)
                             val actorRole = commands.hget(rolesRedisKey, userId) ?: "viewer"
                             val targetRole = commands.hget(rolesRedisKey, cmd.targetUserId) ?: "viewer"
                             val username = userSchema.findById(cmd.targetUserId.toInt())?.username ?: "Unknown"
@@ -271,7 +271,7 @@ fun Application.configureSockets(
                                     ?.forEach { session ->
                                         session.wsSession.send(
                                             Frame.Text(WS_JSON.encodeToString(
-                                                ModeratorActionSuccess(
+                                                ModeratorActionSuccessEvent(
                                                     action = "revoke",
                                                     targetUserId = cmd.targetUserId,
                                                     targetUsername = username,
@@ -286,7 +286,7 @@ fun Application.configureSockets(
                                     ?.forEach { session ->
                                         session.wsSession.send(
                                             Frame.Text(WS_JSON.encodeToString(
-                                                ModeratorRevoked(targetUserId = cmd.targetUserId)
+                                                ModeratorRevokedEvent(targetUserId = cmd.targetUserId)
                                             ))
                                         )
                                     }
@@ -294,7 +294,7 @@ fun Application.configureSockets(
                         }
 
                         "kick_user" -> {
-                            val cmd = WS_JSON.decodeFromString<KickUserIn>(text)
+                            val cmd = WS_JSON.decodeFromString<KickUserCommand>(text)
                             val actorRole = commands.hget(rolesRedisKey, userId) ?: "viewer"
                             val targetRole = commands.hget(rolesRedisKey, cmd.targetUserId) ?: "viewer"
                             val username = userSchema.findById(cmd.targetUserId.toInt())?.username ?: "Unknown"
@@ -306,7 +306,7 @@ fun Application.configureSockets(
                                     ?.forEach { session ->
                                         session.wsSession.send(
                                             Frame.Text(WS_JSON.encodeToString(
-                                                ModeratorActionSuccess(
+                                                ModeratorActionSuccessEvent(
                                                     action = "kick",
                                                     targetUserId = cmd.targetUserId,
                                                     targetUsername = username
@@ -322,7 +322,7 @@ fun Application.configureSockets(
                                         launch {
                                             session.wsSession.send(
                                                 Frame.Text(WS_JSON.encodeToString(
-                                                    UserKicked(
+                                                    UserKickedEvent(
                                                         targetUserId = cmd.targetUserId,
                                                         reason = "Kicked by moderator"
                                                     )
@@ -335,7 +335,7 @@ fun Application.configureSockets(
                         }
 
                         "mute_user" -> {
-                            val cmd = WS_JSON.decodeFromString<MuteUserIn>(text)
+                            val cmd = WS_JSON.decodeFromString<MuteUserCommand>(text)
                             val actorRole = commands.hget(rolesRedisKey, userId) ?: "viewer"
                             val targetRole = commands.hget(rolesRedisKey, cmd.targetUserId) ?: "viewer"
                             val username = userSchema.findById(cmd.targetUserId.toInt())?.username ?: "Unknown"
@@ -350,7 +350,7 @@ fun Application.configureSockets(
                                     ?.forEach { session ->
                                         session.wsSession.send(
                                             Frame.Text(WS_JSON.encodeToString(
-                                                ModeratorActionSuccess(
+                                                ModeratorActionSuccessEvent(
                                                     action = "mute",
                                                     targetUserId = cmd.targetUserId,
                                                     targetUsername = username,
@@ -366,7 +366,7 @@ fun Application.configureSockets(
                                     ?.forEach { session ->
                                         session.wsSession.send(
                                             Frame.Text(WS_JSON.encodeToString(
-                                                UserMuted(
+                                                UserMutedEvent(
                                                     targetUserId = cmd.targetUserId,
                                                     durationMs = cmd.durationMs
                                                 )
@@ -377,7 +377,7 @@ fun Application.configureSockets(
                         }
 
                         "unmute_user" -> {
-                            val cmd = WS_JSON.decodeFromString<UnmuteUserIn>(text)
+                            val cmd = WS_JSON.decodeFromString<UnmuteUserCommand>(text)
                             val actorRole = commands.hget(rolesRedisKey, userId) ?: "viewer"
                             val targetRole = commands.hget(rolesRedisKey, cmd.targetUserId) ?: "viewer"
                             val username = userSchema.findById(cmd.targetUserId.toInt())?.username ?: "Unknown"
@@ -392,7 +392,7 @@ fun Application.configureSockets(
                                     ?.forEach { session ->
                                         session.wsSession.send(
                                             Frame.Text(WS_JSON.encodeToString(
-                                                ModeratorActionSuccess(
+                                                ModeratorActionSuccessEvent(
                                                     action = "unmute",
                                                     targetUserId = cmd.targetUserId,
                                                     targetUsername = username
@@ -407,7 +407,7 @@ fun Application.configureSockets(
                                     ?.forEach { session ->
                                         session.wsSession.send(
                                             Frame.Text(WS_JSON.encodeToString(
-                                                UserUnmuted(targetUserId = cmd.targetUserId)
+                                                UserUnmutedEvent(targetUserId = cmd.targetUserId)
                                             ))
                                         )
                                     }
@@ -431,7 +431,7 @@ fun Application.configureSockets(
                 if (!isStreamer) {
                     val updated = commands.decr(visCountKey).toInt()
                     commands.publish(visCh, WS_JSON.encodeToString(
-                        VisitorCountUpdate(currentCount = updated)
+                        VisitorCountEvent(currentCount = updated)
                     ))
                 } else {
                     // Streamer cleanup
@@ -444,7 +444,7 @@ fun Application.configureSockets(
                     sessions.forEach { session ->
                         try {
                             if (session.userId != userId) { // Don't disconnect ourselves
-                                session.wsSession.send(Frame.Text(WS_JSON.encodeToString(PublisherDisconnected())))
+                                session.wsSession.send(Frame.Text(WS_JSON.encodeToString(PublisherDisconnectedEvent)))
                                 session.wsSession.close()
                                 dead.add(session)
                             }
@@ -454,8 +454,8 @@ fun Application.configureSockets(
                     }
                     removeDeadSessions(sessions, dead)
 
-                    commands.publish(visCh, WS_JSON.encodeToString(VisitorCountUpdate(currentCount = 0)))
-                    commands.publish(likeCh, WS_JSON.encodeToString(LikeUpdate(newCount =0)))
+                    commands.publish(visCh, WS_JSON.encodeToString(VisitorCountEvent(currentCount = 0)))
+                    commands.publish(likeCh, WS_JSON.encodeToString(LikeUpdateEvent(newCount =0)))
                 }
             }
         }
