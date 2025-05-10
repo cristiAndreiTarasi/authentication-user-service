@@ -47,16 +47,11 @@ fun Application.module() {
     val tagSchema = TagSchema(postgresConnection)
     val streamSchema = StreamSchema(postgresConnection, categorySchema, tagSchema, gridFsService)
 
-    val streamSessionsMap = ConcurrentHashMap<String, MutableList<UserSession>>()
-    val streamSubscribersMap = ConcurrentHashMap<String, Boolean>()
-
     configureSerialization()
     configureHTTP()
     configureSockets(
         userSchema,
         tokenService,
-        streamSessionsMap,
-        streamSubscribersMap
     )
     configureSecurity()
     configureRouting(

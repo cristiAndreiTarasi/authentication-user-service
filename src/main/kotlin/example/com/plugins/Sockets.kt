@@ -5,6 +5,7 @@ import example.com.routes.dtos.ChatMessageCommand
 import example.com.routes.dtos.ChatMessageEvent
 import example.com.routes.dtos.GrantModeratorCommand
 import example.com.routes.dtos.KickUserCommand
+import example.com.routes.dtos.LikeCommand
 import example.com.routes.dtos.LikeUpdateEvent
 import example.com.routes.dtos.ModeratorActionSuccessEvent
 import example.com.routes.dtos.ModeratorGrantedEvent
@@ -20,6 +21,7 @@ import example.com.routes.dtos.UserMutedEvent
 import example.com.routes.dtos.UserSession
 import example.com.routes.dtos.UserUnmutedEvent
 import example.com.routes.dtos.VisitorCountEvent
+import example.com.routes.dtos.WsCommand
 import example.com.routes.dtos.WsEvent
 import example.com.schemas.UserSchema
 import example.com.services.token.TokenService
@@ -52,8 +54,6 @@ import java.util.concurrent.ConcurrentHashMap
 fun Application.configureSockets(
     userSchema: UserSchema,
     tokenService: TokenService,
-    streamSessionsMap: ConcurrentHashMap<String, MutableList<UserSession>>,
-    streamSubscribersMap: ConcurrentHashMap<String, Boolean>
 ) {
     install(WebSockets) {
         pingPeriod = Duration.ofSeconds(15)
@@ -71,7 +71,7 @@ fun Application.configureSockets(
     val commands: RedisCommands<String, String> = redisConnection.sync()
     val pubSubConnection: StatefulRedisPubSubConnection<String, String> = redisClient.connectPubSub()
 
-    val activeSubscriptions = ConcurrentHashMap<String, RedisPubSubListener<String, String>>()
+    val channelToSessions = ConcurrentHashMap<String, MutableList<UserSession>>()
 
     // Key/Channel functions unchanged...
     fun rolesKey(streamId: String) = "stream:$streamId:roles"
@@ -88,16 +88,37 @@ fun Application.configureSockets(
         else -> 1
     }
 
-    suspend fun DefaultWebSocketServerSession.sendSerialized(event: WsEvent) {
+    suspend fun DefaultWebSocketServerSession.sendJson(event: WsEvent) {
         send(Frame.Text(WS_JSON.encodeToString(event)))
     }
 
-    // Helper function for thread-safe session cleanup
     fun removeDeadSessions(sessions: MutableList<UserSession>, dead: List<UserSession>) {
-        synchronized(sessions) {
-            sessions.removeAll(dead.toSet())
-        }
+        synchronized(sessions) { sessions.removeAll(dead.toSet()) }
     }
+
+    val globalListener = object : RedisPubSubListener<String, String> {
+        override fun message(channel: String, message: String) {
+            val sessions = channelToSessions[channel] ?: return  // only dispatch to relevant sessions
+            launch {
+                val dead = mutableListOf<UserSession>()
+                sessions.forEach { session ->
+                    try {
+                        session.wsSession.outgoing.send(Frame.Text(message))
+                    } catch (e: Exception) {
+                        dead += session
+                    }
+                }
+                removeDeadSessions(sessions, dead)
+            }
+        }
+        // Other callbacks unused
+        override fun message(pattern: String, channel: String, message: String) {}
+        override fun subscribed(channel: String, count: Long) {}
+        override fun psubscribed(pattern: String, count: Long) {}
+        override fun unsubscribed(channel: String, count: Long) {}
+        override fun punsubscribed(pattern: String, count: Long) {}
+    }
+    pubSubConnection.addListener(globalListener)
 
     routing {
         webSocket("/ws") {
@@ -125,12 +146,18 @@ fun Application.configureSockets(
             val likeCh = likeChannel(streamId)
             val visCh = visitorChannel(streamId)
 
-            // Session tracking
-            val sessions = streamSessionsMap.getOrPut(streamId) {
-                Collections.synchronizedList(mutableListOf<UserSession>())
-            }
+            // prepare our session
             val currentUserSession = UserSession(this, userId)
-            sessions.add(currentUserSession)
+
+            // subscribe & track on ALL three channels
+            val channels = listOf(chatCh, likeCh, visCh)
+            channels.forEach { ch ->
+                channelToSessions.computeIfAbsent(ch) {
+                    // first subscription to this Redis channel
+                    pubSubConnection.sync().subscribe(ch)
+                    Collections.synchronizedList(mutableListOf())
+                }.add(currentUserSession)
+            }
 
             // Connection Logic ----------------------------------------------
             if (isStreamer) {
@@ -160,40 +187,6 @@ fun Application.configureSockets(
                 }
             }
 
-            // PubSub Setup --------------------------------------------------
-            if (streamSubscribersMap.putIfAbsent(streamId, true) == null) {
-                val listener = object : RedisPubSubListener<String, String> {
-                    override fun message(channel: String, message: String) {
-                        launch {
-                            val dead = mutableListOf<UserSession>() // Correct type
-                            sessions.forEach { userSession ->
-                                try {
-                                    userSession.wsSession.outgoing.send(Frame.Text(message))
-                                } catch (e: Exception) {
-                                    dead.add(userSession)
-                                }
-                            }
-
-                            removeDeadSessions(sessions, dead)
-
-                            if (dead.isNotEmpty()) {
-                                println("Cleaned up ${dead.size} dead sessions for stream $streamId")
-                            }
-                        }
-                    }
-
-                    override fun message(pattern: String, channel: String, message: String) {}
-                    override fun subscribed(channel: String, count: Long) {}
-                    override fun psubscribed(pattern: String, count: Long) {}
-                    override fun unsubscribed(channel: String, count: Long) {}
-                    override fun punsubscribed(pattern: String, count: Long) {}
-                }
-
-                pubSubConnection.addListener(listener)
-                pubSubConnection.sync().subscribe(chatCh, likeCh, visCh)
-                activeSubscriptions[streamId] = listener
-            }
-
             // Message Processing Loop ---------------------------------------
             try {
                 for (frame in incoming) {
@@ -201,231 +194,251 @@ fun Application.configureSockets(
 
                     val text = frame.readText()
                     val json = WS_JSON.parseToJsonElement(text).jsonObject
+                    val cmd = WS_JSON.decodeFromString<WsCommand>(text)
+                    val streamSessions = channelToSessions[chatCh] ?: emptyList<UserSession>()
 
-                    when(json["type"]?.jsonPrimitive?.content) {
-                        "chat_message" -> {
+                    when(cmd) {
+                        is ChatMessageCommand -> {
                             val msg = WS_JSON.decodeFromString<ChatMessageCommand>(text)
                             commands.publish(chatCh, WS_JSON.encodeToString(
-                                ChatMessageEvent(userId = msg.userId, username = msg.username, message = msg.message)
+                                ChatMessageEvent(userId = cmd.userId, username = cmd.username, message = cmd.message)
                             ))
                         }
 
-                        "like" -> {
+                        is LikeCommand -> {
                             val newCount = commands.incr(lCountKey).toInt()
                             commands.publish(likeCh, WS_JSON.encodeToString(
                                 LikeUpdateEvent(newCount = newCount)
                             ))
                         }
 
-                        "grant_moderator" -> {
-                            val cmd = WS_JSON.decodeFromString<GrantModeratorCommand>(text)
-                            val actorRole = commands.hget(rolesRedisKey, userId) ?: "viewer"
+                        is GrantModeratorCommand -> {
+                            val actorRole  = commands.hget(rolesRedisKey, userId) ?: "viewer"
                             val targetRole = commands.hget(rolesRedisKey, cmd.targetUserId) ?: "viewer"
-                            val username = userSchema.findById(cmd.targetUserId.toInt())?.username ?: "Unknown"
+                            val username   = userSchema.findById(cmd.targetUserId.toInt())?.username ?: "Unknown"
 
                             if (rank(actorRole) > rank(targetRole)) {
                                 // 1. Update Redis
                                 commands.hset(rolesRedisKey, cmd.targetUserId, "moderator")
 
-                                // 2. Send confirmation to grantor (actor)
-                                streamSessionsMap[streamId]
-                                    ?.filter { it.userId == userId }
-                                    ?.forEach { session ->
-                                        session.wsSession.send(
-                                            Frame.Text(WS_JSON.encodeToString(
+                                // 2. Confirm to *actor’s* sessions
+                                streamSessions
+                                    .filter { it.userId == userId }
+                                    .forEach { session ->
+                                        session.wsSession.send(Frame.Text(
+                                            WS_JSON.encodeToString(
                                                 ModeratorActionSuccessEvent(
                                                     action = "grant",
-                                                    targetUserId = cmd.targetUserId,
-                                                    targetUsername = username,
+                                                    targetUserId   = cmd.targetUserId,
+                                                    targetUsername = username
                                                 )
-                                            ))
-                                        )
-                                }
-
-                                // 3. Notify target user
-                                streamSessionsMap[streamId]
-                                    ?.filter { it.userId == cmd.targetUserId }
-                                    ?.forEach { session ->
-                                        session.wsSession.send(
-                                            Frame.Text(WS_JSON.encodeToString(
-                                                ModeratorGrantedEvent(targetUserId = cmd.targetUserId)
-                                            ))
-                                        )
+                                            )
+                                        ))
                                     }
+
+                                // 3. Notify *target* user
+                                /*streamSessions
+                                    .filter { it.userId == cmd.targetUserId }
+                                    .forEach { session ->
+                                        session.wsSession.send(Frame.Text(
+                                            WS_JSON.encodeToString(
+                                                ModeratorGrantedEvent(targetUserId = cmd.targetUserId)
+                                            )
+                                        ))
+                                    }*/
+                                commands.publish(
+                                    chatCh,
+                                    WS_JSON.encodeToString(ModeratorGrantedEvent(targetUserId = cmd.targetUserId))
+                                )
                             }
                         }
 
-                        "revoke_moderator" -> {
-                            val cmd = WS_JSON.decodeFromString<RevokeModeratorCommand>(text)
-                            val actorRole = commands.hget(rolesRedisKey, userId) ?: "viewer"
+                        is RevokeModeratorCommand -> {
+                            val actorRole  = commands.hget(rolesRedisKey, userId) ?: "viewer"
                             val targetRole = commands.hget(rolesRedisKey, cmd.targetUserId) ?: "viewer"
-                            val username = userSchema.findById(cmd.targetUserId.toInt())?.username ?: "Unknown"
+                            val username   = userSchema.findById(cmd.targetUserId.toInt())?.username ?: "Unknown"
 
                             if (rank(actorRole) > rank(targetRole)) {
                                 // 1. Update Redis
                                 commands.hdel(rolesRedisKey, cmd.targetUserId)
 
-                                // 2. Send confirmation to grantor (actor)
-                                streamSessionsMap[streamId]
-                                    ?.filter { it.userId == userId }
-                                    ?.forEach { session ->
-                                        session.wsSession.send(
-                                            Frame.Text(WS_JSON.encodeToString(
+                                // 2. Confirm to actor
+                                streamSessions
+                                    .filter { it.userId == userId }
+                                    .forEach { session ->
+                                        session.wsSession.send(Frame.Text(
+                                            WS_JSON.encodeToString(
                                                 ModeratorActionSuccessEvent(
-                                                    action = "revoke",
-                                                    targetUserId = cmd.targetUserId,
-                                                    targetUsername = username,
-                                                )
-                                            ))
-                                        )
-                                    }
-
-                                // 3. Notify target user
-                                streamSessionsMap[streamId]
-                                    ?.filter { it.userId == cmd.targetUserId }
-                                    ?.forEach { session ->
-                                        session.wsSession.send(
-                                            Frame.Text(WS_JSON.encodeToString(
-                                                ModeratorRevokedEvent(targetUserId = cmd.targetUserId)
-                                            ))
-                                        )
-                                    }
-                            }
-                        }
-
-                        "kick_user" -> {
-                            val cmd = WS_JSON.decodeFromString<KickUserCommand>(text)
-                            val actorRole = commands.hget(rolesRedisKey, userId) ?: "viewer"
-                            val targetRole = commands.hget(rolesRedisKey, cmd.targetUserId) ?: "viewer"
-                            val username = userSchema.findById(cmd.targetUserId.toInt())?.username ?: "Unknown"
-
-                            if (rank(actorRole) > rank(targetRole)) {
-                                // 1. Confirm to ALL actor sessions
-                                streamSessionsMap[streamId]
-                                    ?.filter { it.userId == userId } // Actor's sessions
-                                    ?.forEach { session ->
-                                        session.wsSession.send(
-                                            Frame.Text(WS_JSON.encodeToString(
-                                                ModeratorActionSuccessEvent(
-                                                    action = "kick",
-                                                    targetUserId = cmd.targetUserId,
+                                                    action         = "revoke",
+                                                    targetUserId   = cmd.targetUserId,
                                                     targetUsername = username
                                                 )
-                                            ))
-                                        )
-                                    }
-
-                                // 2. Notify ALL target sessions and close them
-                                streamSessionsMap[streamId]
-                                    ?.filter { it.userId == cmd.targetUserId } // Target's sessions
-                                    ?.forEach { session ->
-                                        launch {
-                                            session.wsSession.send(
-                                                Frame.Text(WS_JSON.encodeToString(
-                                                    UserKickedEvent(
-                                                        targetUserId = cmd.targetUserId,
-                                                        reason = "Kicked by moderator"
-                                                    )
-                                                ))
                                             )
-                                            session.wsSession.close()
-                                        }
-                                    }
-                            }
-                        }
-
-                        "mute_user" -> {
-                            val cmd = WS_JSON.decodeFromString<MuteUserCommand>(text)
-                            val actorRole = commands.hget(rolesRedisKey, userId) ?: "viewer"
-                            val targetRole = commands.hget(rolesRedisKey, cmd.targetUserId) ?: "viewer"
-                            val username = userSchema.findById(cmd.targetUserId.toInt())?.username ?: "Unknown"
-
-                            if (rank(actorRole) > rank(targetRole)) {
-                                // 1. Set mute in Redis
-                                commands.setex("muted:${cmd.targetUserId}", cmd.durationMs / 1000, "1")
-
-                                // 2. Confirm to actor
-                                streamSessionsMap[streamId]
-                                    ?.filter { it.userId == userId }
-                                    ?.forEach { session ->
-                                        session.wsSession.send(
-                                            Frame.Text(WS_JSON.encodeToString(
-                                                ModeratorActionSuccessEvent(
-                                                    action = "mute",
-                                                    targetUserId = cmd.targetUserId,
-                                                    targetUsername = username,
-                                                    durationMs = cmd.durationMs
-                                                )
-                                            ))
-                                        )
+                                        ))
                                     }
 
                                 // 3. Notify target
-                                streamSessionsMap[streamId]
-                                    ?.filter { it.userId == cmd.targetUserId }
-                                    ?.forEach { session ->
-                                        session.wsSession.send(
-                                            Frame.Text(WS_JSON.encodeToString(
-                                                UserMutedEvent(
-                                                    targetUserId = cmd.targetUserId,
-                                                    durationMs = cmd.durationMs
-                                                )
-                                            ))
-                                        )
-                                    }
+                                /*streamSessions
+                                    .filter { it.userId == cmd.targetUserId }
+                                    .forEach { session ->
+                                        session.wsSession.send(Frame.Text(
+                                            WS_JSON.encodeToString(
+                                                ModeratorRevokedEvent(targetUserId = cmd.targetUserId)
+                                            )
+                                        ))
+                                    }*/
+                                commands.publish(
+                                    chatCh,
+                                    WS_JSON.encodeToString(ModeratorRevokedEvent(targetUserId = cmd.targetUserId))
+                                )
                             }
                         }
 
-                        "unmute_user" -> {
-                            val cmd = WS_JSON.decodeFromString<UnmuteUserCommand>(text)
-                            val actorRole = commands.hget(rolesRedisKey, userId) ?: "viewer"
+                        is KickUserCommand -> {
+                            val actorRole  = commands.hget(rolesRedisKey, userId) ?: "viewer"
                             val targetRole = commands.hget(rolesRedisKey, cmd.targetUserId) ?: "viewer"
-                            val username = userSchema.findById(cmd.targetUserId.toInt())?.username ?: "Unknown"
+                            val username   = userSchema.findById(cmd.targetUserId.toInt())?.username ?: "Unknown"
+
+                            if (rank(actorRole) > rank(targetRole)) {
+                                // 1. Confirm to *actor*
+                                streamSessions
+                                    .filter { it.userId == userId }
+                                    .forEach { session ->
+                                        session.wsSession.send(Frame.Text(
+                                            WS_JSON.encodeToString(
+                                                ModeratorActionSuccessEvent(
+                                                    action         = "kick",
+                                                    targetUserId   = cmd.targetUserId,
+                                                    targetUsername = username
+                                                )
+                                            )
+                                        ))
+                                    }
+
+                                // 2. Notify & close *target* sessions
+                                /*streamSessions
+                                    .filter { it.userId == cmd.targetUserId }
+                                    .forEach { session ->
+                                        launch {
+                                            session.wsSession.send(Frame.Text(
+                                                WS_JSON.encodeToString(
+                                                    UserKickedEvent(
+                                                        targetUserId = cmd.targetUserId,
+                                                        reason       = "Kicked by moderator"
+                                                    )
+                                                )
+                                            ))
+                                            session.wsSession.close()
+                                        }
+                                    }*/
+                                commands.publish(
+                                    chatCh,
+                                    WS_JSON.encodeToString(
+                                        UserKickedEvent(targetUserId = cmd.targetUserId, reason = "Kicked by moderator")
+                                    )
+                                )
+                            }
+                        }
+
+                        is MuteUserCommand -> {
+                            val actorRole  = commands.hget(rolesRedisKey, userId) ?: "viewer"
+                            val targetRole = commands.hget(rolesRedisKey, cmd.targetUserId) ?: "viewer"
+                            val username   = userSchema.findById(cmd.targetUserId.toInt())?.username ?: "Unknown"
+
+                            if (rank(actorRole) > rank(targetRole)) {
+                                // 1. Mute in Redis
+                                commands.setex("muted:${cmd.targetUserId}", cmd.durationMs / 1000, "1")
+
+                                // 2. Confirm to actor
+                                streamSessions
+                                    .filter { it.userId == userId }
+                                    .forEach { session ->
+                                        session.wsSession.send(Frame.Text(
+                                            WS_JSON.encodeToString(
+                                                ModeratorActionSuccessEvent(
+                                                    action         = "mute",
+                                                    targetUserId   = cmd.targetUserId,
+                                                    targetUsername = username,
+                                                    durationMs     = cmd.durationMs
+                                                )
+                                            )
+                                        ))
+                                    }
+
+                                // 3. Notify target
+                                /*streamSessions
+                                    .filter { it.userId == cmd.targetUserId }
+                                    .forEach { session ->
+                                        session.wsSession.send(Frame.Text(
+                                            WS_JSON.encodeToString(
+                                                UserMutedEvent(
+                                                    targetUserId = cmd.targetUserId,
+                                                    durationMs   = cmd.durationMs
+                                                )
+                                            )
+                                        ))
+                                    }*/
+                                commands.publish(
+                                    chatCh,
+                                    WS_JSON.encodeToString(
+                                        UserMutedEvent(targetUserId = cmd.targetUserId, durationMs = cmd.durationMs)
+                                    )
+                                )
+                            }
+                        }
+
+                        is UnmuteUserCommand -> {
+                            val actorRole  = commands.hget(rolesRedisKey, userId) ?: "viewer"
+                            val targetRole = commands.hget(rolesRedisKey, cmd.targetUserId) ?: "viewer"
+                            val username   = userSchema.findById(cmd.targetUserId.toInt())?.username ?: "Unknown"
 
                             if (rank(actorRole) > rank(targetRole)) {
                                 // 1. Remove mute
                                 commands.del("muted:${cmd.targetUserId}")
 
-                                // 1. Confirm to ALL actor sessions
-                                streamSessionsMap[streamId]
-                                    ?.filter { it.userId == userId } // Actor's sessions
-                                    ?.forEach { session ->
-                                        session.wsSession.send(
-                                            Frame.Text(WS_JSON.encodeToString(
+                                // 2. Confirm to actor
+                                streamSessions
+                                    .filter { it.userId == userId }
+                                    .forEach { session ->
+                                        session.wsSession.send(Frame.Text(
+                                            WS_JSON.encodeToString(
                                                 ModeratorActionSuccessEvent(
-                                                    action = "unmute",
-                                                    targetUserId = cmd.targetUserId,
+                                                    action         = "unmute",
+                                                    targetUserId   = cmd.targetUserId,
                                                     targetUsername = username
                                                 )
-                                            ))
-                                        )
+                                            )
+                                        ))
                                     }
 
-                                // 2. Notify ALL target sessions
-                                streamSessionsMap[streamId]
-                                    ?.filter { it.userId == cmd.targetUserId } // Target's sessions
-                                    ?.forEach { session ->
-                                        session.wsSession.send(
-                                            Frame.Text(WS_JSON.encodeToString(
+                                // 3. Notify target
+                                /*streamSessions
+                                    .filter { it.userId == cmd.targetUserId }
+                                    .forEach { session ->
+                                        session.wsSession.send(Frame.Text(
+                                            WS_JSON.encodeToString(
                                                 UserUnmutedEvent(targetUserId = cmd.targetUserId)
-                                            ))
-                                        )
-                                    }
+                                            )
+                                        ))
+                                    }*/
+                                commands.publish(
+                                    chatCh,
+                                    WS_JSON.encodeToString(UserUnmutedEvent(targetUserId = cmd.targetUserId))
+                                )
                             }
                         }
                     }
                 }
             } finally {
-                // Cleanup
-                sessions.remove(currentUserSession)
-
-                if (sessions.isEmpty()) {
-                    activeSubscriptions[streamId]?.let {
-                        pubSubConnection.removeListener(it)
-                        pubSubConnection.sync().unsubscribe(chatCh, likeCh, visCh)
+                // teardown: remove from channels & unsubscribe when empty
+                channels.forEach { ch ->
+                    channelToSessions[ch]?.let { list ->
+                        list.remove(currentUserSession)
+                        if (list.isEmpty()) {
+                            pubSubConnection.sync().unsubscribe(ch)
+                            channelToSessions.remove(ch)
+                        }
                     }
-                    streamSessionsMap.remove(streamId)
-                    streamSubscribersMap.remove(streamId)
                 }
 
                 if (!isStreamer) {
@@ -439,20 +452,21 @@ fun Application.configureSockets(
                     commands.set(lCountKey, "0")
                     commands.del(pubKey)
 
-                    // Notify all visitors first
+                    // Notify remaining visitors that the publisher disconnected
                     val dead = mutableListOf<UserSession>()
-                    sessions.forEach { session ->
+                    channelToSessions[chatCh]?.forEach { session ->
                         try {
-                            if (session.userId != userId) { // Don't disconnect ourselves
-                                session.wsSession.send(Frame.Text(WS_JSON.encodeToString(PublisherDisconnectedEvent)))
-                                session.wsSession.close()
-                                dead.add(session)
-                            }
+                            session.wsSession.outgoing.send(
+                                Frame.Text(WS_JSON.encodeToString(PublisherDisconnectedEvent))
+                            )
+                            session.wsSession.close()
+                            dead.add(session)
                         } catch (e: Exception) {
                             dead.add(session)
                         }
                     }
-                    removeDeadSessions(sessions, dead)
+                    // Remove dead sessions from the chat channel list
+                    removeDeadSessions(channelToSessions[chatCh] ?: mutableListOf(), dead)
 
                     commands.publish(visCh, WS_JSON.encodeToString(VisitorCountEvent(currentCount = 0)))
                     commands.publish(likeCh, WS_JSON.encodeToString(LikeUpdateEvent(newCount =0)))
