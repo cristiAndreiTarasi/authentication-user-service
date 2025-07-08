@@ -78,6 +78,9 @@ fun Application.configureSockets(
     fun publisherKey(streamId: String) = "stream:$streamId:publisher"
     fun visitorCountKey(streamId: String) = "stream:$streamId:visitors"
     fun likeCountKey(streamId: String) = "stream:$streamId:likes"
+    fun kickedKey(streamId: String) = "stream:$streamId:kicked"
+
+    fun userChannel(userId: String) = "user:$userId:events"
     fun chatChannel(streamId: String) = "stream:$streamId:chat"
     fun likeChannel(streamId: String) = "stream:$streamId:like"
     fun visitorChannel(streamId: String) = "stream:$streamId:visitors"
@@ -137,20 +140,28 @@ fun Application.configureSockets(
                 return@webSocket
             }
 
+            // Check if user is kicked before processing
+            if (!isStreamer && commands.sismember(kickedKey(streamId), userId)) {
+                close(CloseReason(CloseReason.Codes.VIOLATED_POLICY, "You've been kicked from this stream"))
+                return@webSocket
+            }
+
             // Redis keys/channels
             val rolesRedisKey = rolesKey(streamId)
             val pubKey = publisherKey(streamId)
             val visCountKey = visitorCountKey(streamId)
             val lCountKey = likeCountKey(streamId)
+
             val chatCh = chatChannel(streamId)
             val likeCh = likeChannel(streamId)
             val visCh = visitorChannel(streamId)
+            val userCh = userChannel(userId)
 
             // prepare our session
             val currentUserSession = UserSession(this, userId)
 
             // subscribe & track on ALL three channels
-            val channels = listOf(chatCh, likeCh, visCh)
+            val channels = listOf(chatCh, likeCh, visCh, userCh)
             channels.forEach { ch ->
                 channelToSessions.computeIfAbsent(ch) {
                     // first subscription to this Redis channel
@@ -161,6 +172,7 @@ fun Application.configureSockets(
 
             // Connection Logic ----------------------------------------------
             if (isStreamer) {
+                commands.del(kickedKey(streamId))
                 commands.hset(pubKey, "userId", userId)
                 commands.expire(rolesRedisKey, 3600)
                 commands.hset(rolesRedisKey, userId, "publisher")
@@ -247,8 +259,10 @@ fun Application.configureSockets(
                                         ))
                                     }*/
                                 commands.publish(
-                                    chatCh,
-                                    WS_JSON.encodeToString(ModeratorGrantedEvent(targetUserId = cmd.targetUserId))
+                                    userChannel(cmd.targetUserId),
+                                    WS_JSON.encodeToString(
+                                        ModeratorGrantedEvent(targetUserId = cmd.targetUserId)
+                                    )
                                 )
                             }
                         }
@@ -288,7 +302,7 @@ fun Application.configureSockets(
                                         ))
                                     }*/
                                 commands.publish(
-                                    chatCh,
+                                    userChannel(cmd.targetUserId),
                                     WS_JSON.encodeToString(ModeratorRevokedEvent(targetUserId = cmd.targetUserId))
                                 )
                             }
@@ -332,11 +346,24 @@ fun Application.configureSockets(
                                         }
                                     }*/
                                 commands.publish(
-                                    chatCh,
+                                    userChannel(cmd.targetUserId),
                                     WS_JSON.encodeToString(
                                         UserKickedEvent(targetUserId = cmd.targetUserId, reason = "Kicked by moderator")
                                     )
                                 )
+
+                                // Add user to kicked list immediately
+                                commands.sadd(kickedKey(streamId), cmd.targetUserId)
+                                commands.expire(kickedKey(streamId), 3600 * 6)
+
+                                // Immediately close any existing connections for this user
+                                channelToSessions.values.forEach { sessionList ->
+                                    sessionList.filter { it.userId == cmd.targetUserId }.forEach { session ->
+                                        launch {
+                                            session.wsSession.close(CloseReason(CloseReason.Codes.VIOLATED_POLICY, "Kicked"))
+                                        }
+                                    }
+                                }
                             }
                         }
 
@@ -379,7 +406,7 @@ fun Application.configureSockets(
                                         ))
                                     }*/
                                 commands.publish(
-                                    chatCh,
+                                    userChannel(cmd.targetUserId),
                                     WS_JSON.encodeToString(
                                         UserMutedEvent(targetUserId = cmd.targetUserId, durationMs = cmd.durationMs)
                                     )
@@ -422,7 +449,7 @@ fun Application.configureSockets(
                                         ))
                                     }*/
                                 commands.publish(
-                                    chatCh,
+                                    userChannel(cmd.targetUserId),
                                     WS_JSON.encodeToString(UserUnmutedEvent(targetUserId = cmd.targetUserId))
                                 )
                             }
@@ -433,10 +460,12 @@ fun Application.configureSockets(
                 // teardown: remove from channels & unsubscribe when empty
                 channels.forEach { ch ->
                     channelToSessions[ch]?.let { list ->
-                        list.remove(currentUserSession)
-                        if (list.isEmpty()) {
-                            pubSubConnection.sync().unsubscribe(ch)
-                            channelToSessions.remove(ch)
+                        synchronized(list){
+                            list.remove(currentUserSession)
+                            if (list.isEmpty()) {
+                                pubSubConnection.sync().unsubscribe(ch)
+                                channelToSessions.remove(ch)
+                            }
                         }
                     }
                 }
@@ -452,24 +481,32 @@ fun Application.configureSockets(
                     commands.set(lCountKey, "0")
                     commands.del(pubKey)
 
-                    // Notify remaining visitors that the publisher disconnected
+                    // Notify all visitors first
                     val dead = mutableListOf<UserSession>()
-                    channelToSessions[chatCh]?.forEach { session ->
+                    channelToSessions.values.flatten().forEach { session ->
                         try {
-                            session.wsSession.outgoing.send(
-                                Frame.Text(WS_JSON.encodeToString(PublisherDisconnectedEvent))
-                            )
-                            session.wsSession.close()
+                            // Send directly to session
+                            session.wsSession.sendJson(PublisherDisconnectedEvent)
+                            session.wsSession.close(CloseReason(CloseReason.Codes.NORMAL, "Stream ended"))
                             dead.add(session)
                         } catch (e: Exception) {
                             dead.add(session)
                         }
                     }
-                    // Remove dead sessions from the chat channel list
-                    removeDeadSessions(channelToSessions[chatCh] ?: mutableListOf(), dead)
 
+                    // Clean up dead sessions
+                    channelToSessions.values.forEach { list ->
+                        synchronized(list) {
+                            list.removeAll(dead)
+                            if (list.isEmpty()) {
+                                pubSubConnection.sync().unsubscribe(/* appropriate channel */)
+                            }
+                        }
+                    }
+
+                    // Update counts (optional)
                     commands.publish(visCh, WS_JSON.encodeToString(VisitorCountEvent(currentCount = 0)))
-                    commands.publish(likeCh, WS_JSON.encodeToString(LikeUpdateEvent(newCount =0)))
+                    commands.publish(likeCh, WS_JSON.encodeToString(LikeUpdateEvent(newCount = 0)))
                 }
             }
         }
@@ -477,6 +514,7 @@ fun Application.configureSockets(
 
     // Shutdown Hook
     environment.monitor.subscribe(ApplicationStopPreparing) {
+        pubSubConnection.removeListener(globalListener)
         pubSubConnection.close()
         redisConnection.close()
         redisClient.shutdown()
