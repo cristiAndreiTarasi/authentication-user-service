@@ -1,8 +1,12 @@
 package example.com
 
 import example.com.config.Constants
-import example.com.plugins.*
-import example.com.routes.dtos.UserSession
+import example.com.plugins.configureHTTP
+import example.com.plugins.configureRouting
+import example.com.plugins.configureSecurity
+import example.com.plugins.configureSerialization
+import example.com.plugins.configureSockets
+import example.com.plugins.connectToPostgres
 import example.com.schemas.CategorySchema
 import example.com.schemas.StreamSchema
 import example.com.schemas.TagSchema
@@ -10,16 +14,16 @@ import example.com.schemas.TokenSchema
 import example.com.schemas.UserSchema
 import example.com.services.gridfs.GridFSService
 import example.com.services.hashing.HashingService
+import example.com.services.redis.RedisManager
 import example.com.services.role.RoleService
 import example.com.services.token.TokenConfig
 import example.com.services.token.TokenService
-import io.ktor.server.application.*
-import io.ktor.server.netty.*
-import io.ktor.server.websocket.DefaultWebSocketServerSession
+import io.ktor.server.application.Application
+import io.ktor.server.netty.EngineMain
+import kotlinx.coroutines.launch
 import org.litote.kmongo.KMongo
 import java.sql.Connection
 import java.time.Duration
-import java.util.concurrent.ConcurrentHashMap
 
 fun main(args: Array<String>): Unit = EngineMain.main(args)
 
@@ -47,9 +51,17 @@ fun Application.module() {
     val tagSchema = TagSchema(postgresConnection)
     val streamSchema = StreamSchema(postgresConnection, categorySchema, tagSchema, gridFsService)
 
+    val redisManager = RedisManager("redis://${environment.config.property("db.redis.host").getString()}:${environment.config.property("db.redis.port").getString()}")
+
+    // Start Redis consumer in background
+    launch {
+        redisManager.consumeEvents("live-group")
+    }
+
     configureSerialization()
     configureHTTP()
     configureSockets(
+        redisManager,
         userSchema,
         tokenService,
     )

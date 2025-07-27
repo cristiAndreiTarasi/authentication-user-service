@@ -4,9 +4,10 @@ import io.ktor.server.websocket.DefaultWebSocketServerSession
 import kotlinx.serialization.Required
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import java.util.UUID
 
 // ─── 1) Incoming Commands ───────────────────────────────────────────────────
-@Serializable
+/*@Serializable
 sealed class WsCommand {
     abstract val type: String
 }
@@ -23,6 +24,15 @@ data class ChatMessageCommand(
 object LikeCommand : WsCommand() {
     override val type: String = "like"
 }
+
+@Serializable @SerialName("gift")
+data class GiftCommand(
+    override val type: String = "gift",
+    val userId: String,
+    val username: String,
+    val giftId: String,
+    val giftValue: Int
+) : WsCommand()
 
 @Serializable @SerialName("mute_user")
 data class MuteUserCommand(
@@ -73,6 +83,16 @@ data class ChatMessageEvent(
 data class LikeUpdateEvent(
     override val type: String = "like_update",
     val newCount: Int
+) : WsEvent()
+
+@Serializable @SerialName("send_gift")
+data class GiftEvent(
+    override val type: String = "send_gift",
+    val senderId: String,
+    val senderName: String,
+    val giftId: String,
+    val giftValue: Int,
+    val totalGifts: Long
 ) : WsEvent()
 
 @Serializable @SerialName("visitor_count_update")
@@ -152,5 +172,108 @@ data class ModeratorActionFailureEvent(
 data class UserSession(
     val wsSession: DefaultWebSocketServerSession,
     val userId: String
-)
+)*/
 
+@Serializable
+sealed class LiveEvent {
+    abstract val roomId: String
+    abstract val initiatorId: String
+    abstract val timestamp: Long
+
+    @Serializable data class JoinRoom(
+        override val roomId: String,
+        override val initiatorId: String,
+        override val timestamp: Long = System.currentTimeMillis(),
+        val username: String
+    ) : LiveEvent()
+
+    @Serializable data class LeaveRoom(
+        override val roomId: String,
+        override val initiatorId: String,
+        override val timestamp: Long = System.currentTimeMillis()
+    ) : LiveEvent()
+
+    @Serializable data class ChatMessage(
+        override val roomId: String,
+        override val initiatorId: String,
+        override val timestamp: Long = System.currentTimeMillis(),
+        val text: String,
+        val username: String
+    ) : LiveEvent()
+
+    @Serializable data class Like(
+        override val roomId: String,
+        override val initiatorId: String,
+        override val timestamp: Long = System.currentTimeMillis(),
+        val count: Int = 1
+    ) : LiveEvent()
+
+    @Serializable data class Gift(
+        override val roomId: String,
+        override val initiatorId: String,
+        override val timestamp: Long = System.currentTimeMillis(),
+        val giftId: String,
+        val quantity: Int,
+        val value: Double
+    ) : LiveEvent()
+
+    @Serializable data class KickUser(
+        override val roomId: String,
+        override val initiatorId: String,
+        override val timestamp: Long = System.currentTimeMillis(),
+        val targetUserId: String
+    ) : LiveEvent()
+
+    @Serializable data class MuteUser(
+        override val roomId: String,
+        override val initiatorId: String,
+        override val timestamp: Long = System.currentTimeMillis(),
+        val targetUserId: String
+    ) : LiveEvent()
+
+    @Serializable data class UnmuteUser(
+        override val roomId: String,
+        override val initiatorId: String,
+        override val timestamp: Long = System.currentTimeMillis(),
+        val targetUserId: String
+    ) : LiveEvent()
+
+    @Serializable data class GrantModerator(
+        override val roomId: String,
+        override val initiatorId: String,
+        override val timestamp: Long = System.currentTimeMillis(),
+        val targetUserId: String
+    ) : LiveEvent()
+
+    @Serializable data class RevokeModerator(
+        override val roomId: String,
+        override val initiatorId: String,
+        override val timestamp: Long = System.currentTimeMillis(),
+        val targetUserId: String
+    ) : LiveEvent()
+
+    @Serializable data class StreamStats(
+        override val roomId: String,
+        override val initiatorId: String = "system",
+        override val timestamp: Long = System.currentTimeMillis(),
+        val viewerCount: Int,
+        val totalLikes: Long
+    ) : LiveEvent()
+
+    @Serializable
+    data class PublisherInfoEvent(
+        override val roomId: String,
+        override val initiatorId: String = "system",
+        override val timestamp: Long = System.currentTimeMillis(),
+        val userId: String,
+        val username: String,
+        val avatarUrl: String?
+    ) : LiveEvent()
+
+    @Serializable
+    data class StreamEndedEvent(
+        override val roomId: String,
+        override val initiatorId: String = "system",
+        override val timestamp: Long = System.currentTimeMillis()
+    ) : LiveEvent()
+}
