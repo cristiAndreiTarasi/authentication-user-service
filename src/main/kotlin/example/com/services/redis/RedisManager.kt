@@ -1,5 +1,6 @@
 package example.com.services.redis
 
+import example.com.LiveEventJson
 import example.com.routes.dtos.LiveEvent
 import example.com.services.ws_session.SessionManager
 import io.ktor.websocket.Frame
@@ -33,7 +34,7 @@ class RedisManager(redisUrl: String) {
     private val consumerId = "consumer-${System.getenv("HOSTNAME") ?: "default"}"
 
     fun addToStream(event: LiveEvent) {
-        val json = Json.encodeToString(event)
+        val json = LiveEventJson.encodeToString(event)
         producerCommands.xadd("live_events", mapOf("event" to json))
     }
 
@@ -93,7 +94,7 @@ class RedisManager(redisUrl: String) {
                 for (msg in messages) {
                     val json = msg.body["event"] ?: continue
                     try {
-                        val event = Json.decodeFromString<LiveEvent>(json)
+                        val event = LiveEventJson.decodeFromString<LiveEvent>(json)
                         broadcastToRoom(event.roomId, event)
                         // Acknowledge after successful broadcast
                         consumerCommands.xack(streamKey, consumerGroup, msg.id)
@@ -114,7 +115,7 @@ class RedisManager(redisUrl: String) {
 
 /** Broadcast into all WebSocketSessions in the given room */
 private suspend fun broadcastToRoom(roomId: String, event: LiveEvent) {
-    val json = Json.encodeToString(event)
+    val json = LiveEventJson.encodeToString(event)
     SessionManager.getRoomSessions(roomId).forEach { session ->
         try {
             session.send(Frame.Text(json))

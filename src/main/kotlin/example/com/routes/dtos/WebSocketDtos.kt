@@ -180,20 +180,26 @@ sealed class LiveEvent {
     abstract val initiatorId: String
     abstract val timestamp: Long
 
-    @Serializable data class JoinRoom(
+    @Serializable
+    @SerialName("JoinRoom")
+    data class JoinRoom(
         override val roomId: String,
         override val initiatorId: String,
         override val timestamp: Long = System.currentTimeMillis(),
         val username: String
     ) : LiveEvent()
 
-    @Serializable data class LeaveRoom(
+    @Serializable
+    @SerialName("LeaveRoom")
+    data class LeaveRoom(
         override val roomId: String,
         override val initiatorId: String,
         override val timestamp: Long = System.currentTimeMillis()
     ) : LiveEvent()
 
-    @Serializable data class ChatMessage(
+    @Serializable
+    @SerialName("ChatMessage")
+    data class ChatMessage(
         override val roomId: String,
         override val initiatorId: String,
         override val timestamp: Long = System.currentTimeMillis(),
@@ -201,14 +207,18 @@ sealed class LiveEvent {
         val username: String
     ) : LiveEvent()
 
-    @Serializable data class Like(
+    @Serializable
+    @SerialName("Like")
+    data class Like(
         override val roomId: String,
         override val initiatorId: String,
         override val timestamp: Long = System.currentTimeMillis(),
         val count: Int = 1
     ) : LiveEvent()
 
-    @Serializable data class Gift(
+    @Serializable
+    @SerialName("Gift")
+    data class Gift(
         override val roomId: String,
         override val initiatorId: String,
         override val timestamp: Long = System.currentTimeMillis(),
@@ -217,42 +227,54 @@ sealed class LiveEvent {
         val value: Double
     ) : LiveEvent()
 
-    @Serializable data class KickUser(
+    @Serializable
+    @SerialName("KickUser")
+    data class KickUser(
         override val roomId: String,
         override val initiatorId: String,
         override val timestamp: Long = System.currentTimeMillis(),
         val targetUserId: String
     ) : LiveEvent()
 
-    @Serializable data class MuteUser(
+    @Serializable
+    @SerialName("MuteUser")
+    data class MuteUser(
         override val roomId: String,
         override val initiatorId: String,
         override val timestamp: Long = System.currentTimeMillis(),
         val targetUserId: String
     ) : LiveEvent()
 
-    @Serializable data class UnmuteUser(
+    @Serializable
+    @SerialName("UnmuteUser")
+    data class UnmuteUser(
         override val roomId: String,
         override val initiatorId: String,
         override val timestamp: Long = System.currentTimeMillis(),
         val targetUserId: String
     ) : LiveEvent()
 
-    @Serializable data class GrantModerator(
+    @Serializable
+    @SerialName("GrantModerator")
+    data class GrantModerator(
         override val roomId: String,
         override val initiatorId: String,
         override val timestamp: Long = System.currentTimeMillis(),
         val targetUserId: String
     ) : LiveEvent()
 
-    @Serializable data class RevokeModerator(
+    @Serializable
+    @SerialName("RevokeModerator")
+    data class RevokeModerator(
         override val roomId: String,
         override val initiatorId: String,
         override val timestamp: Long = System.currentTimeMillis(),
         val targetUserId: String
     ) : LiveEvent()
 
-    @Serializable data class StreamStats(
+    @Serializable
+    @SerialName("StreamStats")
+    data class StreamStats(
         override val roomId: String,
         override val initiatorId: String = "system",
         override val timestamp: Long = System.currentTimeMillis(),
@@ -261,16 +283,18 @@ sealed class LiveEvent {
     ) : LiveEvent()
 
     @Serializable
+    @SerialName("PublisherInfoEvent")
     data class PublisherInfoEvent(
         override val roomId: String,
         override val initiatorId: String = "system",
         override val timestamp: Long = System.currentTimeMillis(),
         val userId: String,
         val username: String,
-        val avatarUrl: String?
+        val avatarUrl: String? = null  // Ensure nullable
     ) : LiveEvent()
 
     @Serializable
+    @SerialName("StreamEndedEvent")
     data class StreamEndedEvent(
         override val roomId: String,
         override val initiatorId: String = "system",

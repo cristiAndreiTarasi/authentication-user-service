@@ -1,5 +1,6 @@
 package example.com.plugins
 
+import example.com.LiveEventJson
 import example.com.routes.dtos.LiveEvent
 import example.com.schemas.UserSchema
 import example.com.services.redis.RedisManager
@@ -50,7 +51,8 @@ fun Application.configureSockets(
     suspend fun kickUser(roomId: String, targetUserId: String) {
         SessionManager.getSession(roomId, targetUserId)?.let { session ->
             try {
-                session.send(Frame.Text(Json.encodeToString(
+                // Use LiveEventJson instead of Json
+                session.send(Frame.Text(LiveEventJson.encodeToString(
                     LiveEvent.KickUser(
                         roomId = roomId,
                         initiatorId = "system",
@@ -89,7 +91,8 @@ fun Application.configureSockets(
                 username = ownerUsername,
                 avatarUrl = ownerAvatar
             )
-            session.send(Frame.Text(Json.encodeToString(event)))
+            // Use LiveEventJson for encoding
+            session.send(Frame.Text(LiveEventJson.encodeToString(event)))
         }
     }
 
@@ -112,7 +115,8 @@ fun Application.configureSockets(
             totalLikes = totalLikes
         )
 
-        session.send(Frame.Text(Json.encodeToString(event)))
+        // Use LiveEventJson for encoding
+        session.send(Frame.Text(LiveEventJson.encodeToString(event)))
     }
 
     suspend fun broadcastStreamOwnerInfo(
@@ -137,7 +141,8 @@ fun Application.configureSockets(
             )
 
             // Broadcast to all sessions in the room
-            val json = Json.encodeToString(event)
+            // Use LiveEventJson for encoding
+            val json = LiveEventJson.encodeToString(event)
             SessionManager.getRoomSessions(roomId).forEach { session ->
                 try {
                     session.send(Frame.Text(json))
@@ -235,8 +240,13 @@ fun Application.configureSockets(
                 // System-generated event, no action needed
             }
 
-            is LiveEvent.PublisherInfoEvent -> TODO()
-            is LiveEvent.StreamEndedEvent -> TODO()
+            is LiveEvent.PublisherInfoEvent -> {
+                // Handle if needed, or leave empty
+            }
+
+            is LiveEvent.StreamEndedEvent -> {
+                // Handle if needed
+            }
         }
     }
 
@@ -244,17 +254,6 @@ fun Application.configureSockets(
         webSocket("/ws/{roomId}/{userId}") {
             val roomId = call.parameters["roomId"]!!
             val userId = call.parameters["userId"]!!
-
-//            val isStreamer = call.request.queryParameters["isStreamer"]?.toBoolean() ?: false
-//            val token = call.request.queryParameters["token"] ?: run {
-//                close(CloseReason(CloseReason.Codes.CANNOT_ACCEPT, "Missing token"))
-//                return@webSocket
-//            }
-            // Just in case alternate method for5 userId
-//            val userId = tokenService.getClaimFromToken(token, "userId") ?: run {
-//                close(CloseReason(CloseReason.Codes.CANNOT_ACCEPT, "Invalid token"))
-//                return@webSocket
-//            }
 
             // Fetch user info from database
             val user = userSchema.findById(userId.toInt())
@@ -282,7 +281,8 @@ fun Application.configureSockets(
                 for (frame in incoming) {
                     when (frame) {
                         is Frame.Text -> {
-                            val event = Json.decodeFromString<LiveEvent>(frame.readText())
+                            // Use LiveEventJson for decoding
+                            val event = LiveEventJson.decodeFromString<LiveEvent>(frame.readText())
                             handleEvent(event, userId, roomId, redisManager)
                         }
                         else -> {}
