@@ -18,8 +18,11 @@ import example.com.services.redis.RedisManager
 import example.com.services.role.RoleService
 import example.com.services.token.TokenConfig
 import example.com.services.token.TokenService
+import example.com.services.ws_session.PermissionManager
 import io.ktor.server.application.Application
+import io.ktor.server.application.ApplicationStopping
 import io.ktor.server.netty.EngineMain
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import org.litote.kmongo.KMongo
 import java.sql.Connection
@@ -28,6 +31,22 @@ import java.time.Duration
 fun main(args: Array<String>): Unit = EngineMain.main(args)
 
 fun Application.module() {
+    val cleanupJob = launch {
+        while (true) {
+            // Run every 6 hours
+            delay(Duration.ofHours(6).toMillis())
+
+            // Trigger cleanup
+            PermissionManager.cleanupOldRooms()
+        }
+    }
+
+
+    // Graceful shutdown handling
+    environment.monitor.subscribe(ApplicationStopping) {
+        cleanupJob.cancel() // Stop job when server stops
+    }
+
     val postgresConnection: Connection = connectToPostgres(embedded = false)
 //    val mongoDatabase: MongoDatabase = connectToMongoDB()
     val mongoClient = KMongo.createClient(Constants.CONNECTION_STRING)

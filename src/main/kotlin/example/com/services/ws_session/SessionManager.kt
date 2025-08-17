@@ -1,34 +1,33 @@
 package example.com.services.ws_session
 
 import io.ktor.websocket.WebSocketSession
+import org.litote.kmongo.MongoOperator
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CopyOnWriteArraySet
 
 object SessionManager {
     private val roomSessions = ConcurrentHashMap<String, MutableSet<WebSocketSession>>()
-    private val sessionToUser = ConcurrentHashMap<WebSocketSession, Pair<String, String>>()
-    private val sessionToRoom = ConcurrentHashMap<WebSocketSession, String>()
+    private val sessionToInfo = ConcurrentHashMap<WebSocketSession, SessionInfo>()
     private val lock = Any()
+
+    data class SessionInfo(
+        val userId: String,
+        val username: String,
+        val roomId: String
+    )
 
     fun addSession(roomId: String, userId: String, username: String, session: WebSocketSession) {
         synchronized(lock) {
-            roomSessions.computeIfAbsent(roomId) { CopyOnWriteArraySet() }.add(session)
-            sessionToUser[session] = userId to username
-            sessionToRoom[session] = roomId
+            roomSessions.computeIfAbsent(roomId) { ConcurrentHashMap.newKeySet() }.add(session)
+            sessionToInfo[session] = SessionInfo(userId, username, roomId)
         }
     }
 
     fun removeSession(session: WebSocketSession) {
         synchronized(lock) {
-            val roomId = sessionToRoom[session]
-            if (roomId != null) {
-                roomSessions[roomId]?.remove(session)
-                if (roomSessions[roomId]?.isEmpty() == true) {
-                    roomSessions.remove(roomId)
-                }
-            }
-            sessionToUser.remove(session)
-            sessionToRoom.remove(session)
+            val info = sessionToInfo[session] ?: return
+            roomSessions[info.roomId]?.remove(session)
+            sessionToInfo.remove(session)
         }
     }
 
@@ -36,18 +35,20 @@ object SessionManager {
         return roomSessions[roomId]?.toSet() ?: emptySet()
     }
 
-    fun getUsername(session: WebSocketSession): String? {
-        return sessionToUser[session]?.second
+    fun getSessionInfo(roomId: String, userId: String): SessionInfo? {
+        return sessionToInfo.entries.firstOrNull {
+            it.value.roomId == roomId && it.value.userId == userId
+        }?.value
     }
 
-    fun getUserId(session: WebSocketSession): String? {
-        return sessionToUser[session]?.first
+    fun getUsername(session: WebSocketSession): String? {
+        return sessionToInfo[session]?.username
     }
 
     fun getSession(roomId: String, userId: String): WebSocketSession? {
-        return roomSessions[roomId]?.firstOrNull {
-            sessionToUser[it]?.first == userId
-        }
+        return sessionToInfo.entries.firstOrNull {
+            it.value.roomId == roomId && it.value.userId == userId
+        }?.key
     }
 }
 

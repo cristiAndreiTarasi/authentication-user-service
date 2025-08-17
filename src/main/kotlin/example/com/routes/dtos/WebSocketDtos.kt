@@ -177,15 +177,15 @@ data class UserSession(
 @Serializable
 sealed class LiveEvent {
     abstract val roomId: String
-    abstract val initiatorId: String
-    abstract val timestamp: Long
+    abstract val initiatorId: String?
+    abstract val timestamp: Long?
 
     @Serializable
     @SerialName("JoinRoom")
     data class JoinRoom(
         override val roomId: String,
-        override val initiatorId: String,
-        override val timestamp: Long = System.currentTimeMillis(),
+        override val initiatorId: String? = null,
+        override val timestamp: Long? = null,
         val username: String
     ) : LiveEvent()
 
@@ -193,26 +193,36 @@ sealed class LiveEvent {
     @SerialName("LeaveRoom")
     data class LeaveRoom(
         override val roomId: String,
-        override val initiatorId: String,
-        override val timestamp: Long = System.currentTimeMillis()
+        override val initiatorId: String? = null,
+        override val timestamp: Long? = null,
+        val username: String
     ) : LiveEvent()
 
     @Serializable
     @SerialName("ChatMessage")
     data class ChatMessage(
         override val roomId: String,
-        override val initiatorId: String,
-        override val timestamp: Long = System.currentTimeMillis(),
+        override val initiatorId: String? = null,
+        override val timestamp: Long? = null,
         val text: String,
         val username: String
+    ) : LiveEvent()
+
+    @Serializable
+    @SerialName("SystemMessage")
+    data class SystemMessage(
+        override val roomId: String,
+        override val initiatorId: String? = null,
+        override val timestamp: Long? = null,
+        val text: String
     ) : LiveEvent()
 
     @Serializable
     @SerialName("Like")
     data class Like(
         override val roomId: String,
-        override val initiatorId: String,
-        override val timestamp: Long = System.currentTimeMillis(),
+        override val initiatorId: String?,
+        override val timestamp: Long? = null,
         val count: Int = 1
     ) : LiveEvent()
 
@@ -220,8 +230,8 @@ sealed class LiveEvent {
     @SerialName("Gift")
     data class Gift(
         override val roomId: String,
-        override val initiatorId: String,
-        override val timestamp: Long = System.currentTimeMillis(),
+        override val initiatorId: String?,
+        override val timestamp: Long? = null,
         val giftId: String,
         val quantity: Int,
         val value: Double
@@ -231,8 +241,8 @@ sealed class LiveEvent {
     @SerialName("KickUser")
     data class KickUser(
         override val roomId: String,
-        override val initiatorId: String,
-        override val timestamp: Long = System.currentTimeMillis(),
+        override val initiatorId: String?,
+        override val timestamp: Long? = null,
         val targetUserId: String
     ) : LiveEvent()
 
@@ -240,8 +250,8 @@ sealed class LiveEvent {
     @SerialName("MuteUser")
     data class MuteUser(
         override val roomId: String,
-        override val initiatorId: String,
-        override val timestamp: Long = System.currentTimeMillis(),
+        override val initiatorId: String?,
+        override val timestamp: Long? = null,
         val targetUserId: String
     ) : LiveEvent()
 
@@ -249,8 +259,8 @@ sealed class LiveEvent {
     @SerialName("UnmuteUser")
     data class UnmuteUser(
         override val roomId: String,
-        override val initiatorId: String,
-        override val timestamp: Long = System.currentTimeMillis(),
+        override val initiatorId: String?,
+        override val timestamp: Long? = null,
         val targetUserId: String
     ) : LiveEvent()
 
@@ -258,8 +268,8 @@ sealed class LiveEvent {
     @SerialName("GrantModerator")
     data class GrantModerator(
         override val roomId: String,
-        override val initiatorId: String,
-        override val timestamp: Long = System.currentTimeMillis(),
+        override val initiatorId: String?,
+        override val timestamp: Long? = null,
         val targetUserId: String
     ) : LiveEvent()
 
@@ -267,8 +277,8 @@ sealed class LiveEvent {
     @SerialName("RevokeModerator")
     data class RevokeModerator(
         override val roomId: String,
-        override val initiatorId: String,
-        override val timestamp: Long = System.currentTimeMillis(),
+        override val initiatorId: String?,
+        override val timestamp: Long? = null,
         val targetUserId: String
     ) : LiveEvent()
 
@@ -276,8 +286,8 @@ sealed class LiveEvent {
     @SerialName("StreamStats")
     data class StreamStats(
         override val roomId: String,
-        override val initiatorId: String = "system",
-        override val timestamp: Long = System.currentTimeMillis(),
+        override val initiatorId: String? = null,
+        override val timestamp: Long? = null,
         val viewerCount: Int,
         val totalLikes: Long
     ) : LiveEvent()
@@ -286,8 +296,8 @@ sealed class LiveEvent {
     @SerialName("PublisherInfoEvent")
     data class PublisherInfoEvent(
         override val roomId: String,
-        override val initiatorId: String = "system",
-        override val timestamp: Long = System.currentTimeMillis(),
+        override val initiatorId: String? = null,
+        override val timestamp: Long? = null,
         val userId: String,
         val username: String,
         val avatarUrl: String? = null  // Ensure nullable
@@ -297,7 +307,7 @@ sealed class LiveEvent {
     @SerialName("StreamEndedEvent")
     data class StreamEndedEvent(
         override val roomId: String,
-        override val initiatorId: String = "system",
-        override val timestamp: Long = System.currentTimeMillis()
+        override val initiatorId: String? = null,
+        override val timestamp: Long? = null
     ) : LiveEvent()
 }

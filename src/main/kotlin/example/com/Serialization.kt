@@ -23,6 +23,7 @@ val LiveEventJson = Json {
             subclass(LiveEvent.StreamStats::class)
             subclass(LiveEvent.PublisherInfoEvent::class)
             subclass(LiveEvent.StreamEndedEvent::class)
+            subclass(LiveEvent.SystemMessage::class)
         }
     }
 }

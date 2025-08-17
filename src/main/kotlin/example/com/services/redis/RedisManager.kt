@@ -41,11 +41,51 @@ class RedisManager(redisUrl: String) {
     fun incrementCounter(key: String, value: Long): Long =
         producerCommands.incrby(key, value)
 
+    fun incrementUserLikeCount(roomId: String, userId: String, count: Long): Long {
+        val key = "room:$roomId:user_likes:$userId"
+        return incrementCounter(key, count)
+    }
+
     fun getCounter(key: String): Long? =
         producerCommands.get(key)?.toLongOrNull()
 
+    private val MAX_HISTORY = 100
+
+    fun addToHistory(roomId: String, event: LiveEvent) {
+        // Only store chat and system messages
+        if (event is LiveEvent.ChatMessage || event is LiveEvent.SystemMessage) {
+            val key = "room:$roomId:history"
+            val json = LiveEventJson.encodeToString(event)
+            producerCommands.lpush(key, json)
+            producerCommands.ltrim(key, 0, (MAX_HISTORY - 1).toLong())
+        }
+    }
+
+    suspend fun getRoomHistory(roomId: String): List<LiveEvent> {
+        val key = "room:$roomId:history"
+        val jsonList = producerCommands.lrange(key, 0, -1)
+
+        return jsonList.reversed().mapNotNull { json ->
+            try {
+                LiveEventJson.decodeFromString<LiveEvent>(json)
+            } catch (e: Exception) {
+                null
+            }
+        }
+    }
+
+    fun deleteHistory(roomId: String) {
+        producerCommands.del("room:$roomId:history")
+    }
+
+    // Update deleteCounters to include history
     fun deleteCounters(roomId: String) {
         producerCommands.del("room:$roomId:likes")
+        val userKeys = producerCommands.keys("room:$roomId:user_likes:*")
+        if (userKeys.isNotEmpty()) {
+            producerCommands.del(*userKeys.toTypedArray())
+        }
+        deleteHistory(roomId)
     }
 
     fun close() {
@@ -116,6 +156,7 @@ class RedisManager(redisUrl: String) {
 /** Broadcast into all WebSocketSessions in the given room */
 private suspend fun broadcastToRoom(roomId: String, event: LiveEvent) {
     val json = LiveEventJson.encodeToString(event)
+
     SessionManager.getRoomSessions(roomId).forEach { session ->
         try {
             session.send(Frame.Text(json))
