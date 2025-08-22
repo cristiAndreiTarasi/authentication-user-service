@@ -2,6 +2,7 @@ package example.com.services.redis
 
 import example.com.LiveEventJson
 import example.com.routes.dtos.LiveEvent
+import example.com.routes.dtos.withDefaults
 import example.com.services.ws_session.SessionManager
 import io.ktor.websocket.Frame
 import io.lettuce.core.Consumer
@@ -15,6 +16,7 @@ import io.lettuce.core.api.StatefulRedisConnection
 import io.lettuce.core.api.async.RedisAsyncCommands
 import io.lettuce.core.api.sync.RedisCommands
 import kotlinx.coroutines.delay
+import kotlinx.serialization.PolymorphicSerializer
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import java.time.Duration
@@ -34,7 +36,11 @@ class RedisManager(redisUrl: String) {
     private val consumerId = "consumer-${System.getenv("HOSTNAME") ?: "default"}"
 
     fun addToStream(event: LiveEvent) {
-        val json = LiveEventJson.encodeToString(event)
+//        val json = LiveEventJson.encodeToString(event)
+//        producerCommands.xadd("live_events", mapOf("event" to json))
+
+        val safe = event.withDefaults()
+        val json = LiveEventJson.encodeToString(PolymorphicSerializer(LiveEvent::class), safe)
         producerCommands.xadd("live_events", mapOf("event" to json))
     }
 
@@ -55,7 +61,9 @@ class RedisManager(redisUrl: String) {
         // Only store chat and system messages
         if (event is LiveEvent.ChatMessage || event is LiveEvent.SystemMessage) {
             val key = "room:$roomId:history"
-            val json = LiveEventJson.encodeToString(event)
+            val safe = event.withDefaults()
+            val json = LiveEventJson.encodeToString(PolymorphicSerializer(LiveEvent::class), safe)
+            producerCommands.xadd("live_events", mapOf("event" to json))
             producerCommands.lpush(key, json)
             producerCommands.ltrim(key, 0, (MAX_HISTORY - 1).toLong())
         }
@@ -155,7 +163,8 @@ class RedisManager(redisUrl: String) {
 
 /** Broadcast into all WebSocketSessions in the given room */
 private suspend fun broadcastToRoom(roomId: String, event: LiveEvent) {
-    val json = LiveEventJson.encodeToString(event)
+    val safe = event.withDefaults()
+    val json = LiveEventJson.encodeToString(PolymorphicSerializer(LiveEvent::class), safe)
 
     SessionManager.getRoomSessions(roomId).forEach { session ->
         try {

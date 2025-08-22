@@ -2,6 +2,7 @@ package example.com.plugins
 
 import example.com.LiveEventJson
 import example.com.routes.dtos.LiveEvent
+import example.com.routes.dtos.withDefaults
 import example.com.schemas.UserSchema
 import example.com.services.redis.RedisManager
 import example.com.services.token.TokenService
@@ -22,6 +23,7 @@ import io.ktor.websocket.WebSocketSession
 import io.ktor.websocket.close
 import io.ktor.websocket.readText
 import kotlinx.coroutines.delay
+import kotlinx.serialization.PolymorphicSerializer
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import java.time.Duration
@@ -37,6 +39,8 @@ fun Application.configureSockets(
         maxFrameSize = Long.MAX_VALUE
         masking      = false
     }
+
+    val liveEventPolymorphic = PolymorphicSerializer(LiveEvent::class)
 
     fun updateStreamStats(roomId: String, redisManager: RedisManager) {
         val viewerCount = SessionManager.getRoomSessions(roomId).size
@@ -59,16 +63,15 @@ fun Application.configureSockets(
 
         SessionManager.getSession(roomId, targetUserId)?.let { session ->
             try {
-                // Use LiveEventJson instead of Json
-                session.send(Frame.Text(LiveEventJson.encodeToString(
-                    LiveEvent.KickUser(
-                        roomId = roomId,
-                        initiatorId = "system",
-                        targetUserId = targetUserId,
-                        timestamp = System.currentTimeMillis()
-                    )
-                )))
+                val kickUserEvent = LiveEvent.KickUser(
+                    roomId = roomId,
+                    initiatorId = "system",
+                    targetUserId = targetUserId,
+                    timestamp = System.currentTimeMillis()
+                )
 
+                val json = LiveEventJson.encodeToString(liveEventPolymorphic, kickUserEvent.withDefaults())
+                session.send(Frame.Text(json))
                 session.close(CloseReason(CloseReason.Codes.VIOLATED_POLICY, "kicked"))
             } catch (e: Exception) {
                 // Connection already closed
@@ -103,14 +106,15 @@ fun Application.configureSockets(
             }
 
         if (ownerUsername != null) {
-            val event = LiveEvent.PublisherInfoEvent(
+            val publisherInfoEvent = LiveEvent.PublisherInfoEvent(
                 roomId = roomId,
                 userId = ownerId,
                 username = ownerUsername,
                 avatarUrl = ownerAvatar
             )
-            // Use LiveEventJson for encoding
-            session.send(Frame.Text(LiveEventJson.encodeToString(event)))
+
+            val json = LiveEventJson.encodeToString(liveEventPolymorphic, publisherInfoEvent.withDefaults())
+            session.send(Frame.Text(json))
         }
     }
 
@@ -127,14 +131,14 @@ fun Application.configureSockets(
         val viewerCount = SessionManager.getRoomSessions(roomId).size
         val totalLikes = redisManager.getCounter("room:$roomId:likes") ?: 0
 
-        val event = LiveEvent.StreamStats(
+        val streamStatsEvent = LiveEvent.StreamStats(
             roomId = roomId,
             viewerCount = viewerCount,
             totalLikes = totalLikes
         )
 
-        // Use LiveEventJson for encoding
-        session.send(Frame.Text(LiveEventJson.encodeToString(event)))
+        val json = LiveEventJson.encodeToString(liveEventPolymorphic, streamStatsEvent.withDefaults())
+        session.send(Frame.Text(json))
     }
 
     suspend fun broadcastStreamOwnerInfo(
@@ -160,7 +164,9 @@ fun Application.configureSockets(
 
             // Broadcast to all sessions in the room
             // Use LiveEventJson for encoding
-            val json = LiveEventJson.encodeToString(event)
+            val safe = event.withDefaults()
+            val json = LiveEventJson.encodeToString(liveEventPolymorphic, safe)
+
             SessionManager.getRoomSessions(roomId).forEach { session ->
                 try {
                     session.send(Frame.Text(json))
@@ -347,7 +353,8 @@ fun Application.configureSockets(
                 // Send chat history first
                 val history = redisManager.getRoomHistory(roomId)
                 history.forEach { event ->
-                    send(Frame.Text(LiveEventJson.encodeToString(event)))
+                    val json = LiveEventJson.encodeToString(liveEventPolymorphic, event.withDefaults())
+                    send(Frame.Text(json))
                 }
 
                 // Send initial state
