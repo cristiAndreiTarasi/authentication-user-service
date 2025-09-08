@@ -1,9 +1,11 @@
 package example.com.plugins
 
 import example.com.routes.authenticationRoutes
+import example.com.routes.eventRoutes
 import example.com.routes.srsHttpHookRoutes
 import example.com.routes.streamRoutes
 import example.com.routes.userRoutes
+import example.com.schemas.EventSchema
 import example.com.schemas.StreamSchema
 import example.com.schemas.TokenSchema
 import example.com.schemas.UserSchema
@@ -19,6 +21,7 @@ fun Application.configureRouting(
     userSchema: UserSchema,
     tokenSchema: TokenSchema,
     streamSchema: StreamSchema,
+    eventSchema: EventSchema,
     hashingService: HashingService,
     tokenService: TokenService,
     postgresConnection: Connection,
@@ -28,6 +31,7 @@ fun Application.configureRouting(
         authenticationRoutes(userSchema, tokenSchema, hashingService, tokenService)
         userRoutes(userSchema, tokenSchema, postgresConnection, gridFSService)
         streamRoutes(streamSchema, gridFSService, userSchema)
+        eventRoutes(eventSchema, gridFSService, userSchema, streamSchema)
         srsHttpHookRoutes(userSchema, tokenService)
     }
 }

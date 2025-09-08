@@ -14,7 +14,7 @@ data class StreamDto(
     val privacyType: PrivacyOptions,
     val ticketPrice: Float,
     var categories: List<CategoryDto>,
-    var tags: List<String>,
+    var tags: List<TagDto>,
     val startsAt: LocalDateTime? = null,
     val createdAt: LocalDateTime,
     val thumbnailId: String? = null,
@@ -29,7 +29,7 @@ data class CreateStreamRequest(
     val privacyType: PrivacyOptions,
     val ticketPrice: Float,
     val categories: List<CategoryDto>,
-    val tags: List<String>,
+    val tags: List<TagDto>,
     val timezoneId: String,
     val thumbnailId: String? = null,
     val startsAt: LocalDateTime? = null
@@ -58,7 +58,7 @@ data class StreamResponseDto(
     val privacyType: PrivacyOptions,
     val ticketPrice: Float,
     val categories: List<CategoryDto>,
-    val tags: List<String>,
+    val tags: List<TagDto>,
     val createdAt: LocalDateTime,
     val thumbnailId: String? = null,
     var thumbnailData: String? = null

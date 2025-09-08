@@ -8,6 +8,7 @@ import example.com.plugins.configureSerialization
 import example.com.plugins.configureSockets
 import example.com.plugins.connectToPostgres
 import example.com.schemas.CategorySchema
+import example.com.schemas.EventSchema
 import example.com.schemas.StreamSchema
 import example.com.schemas.TagSchema
 import example.com.schemas.TokenSchema
@@ -69,6 +70,7 @@ fun Application.module() {
     val categorySchema = CategorySchema(postgresConnection)
     val tagSchema = TagSchema(postgresConnection)
     val streamSchema = StreamSchema(postgresConnection, categorySchema, tagSchema, gridFsService)
+    val eventSchema = EventSchema(postgresConnection, categorySchema, tagSchema, gridFsService)
 
     val redisManager = RedisManager("redis://${environment.config.property("db.redis.host").getString()}:${environment.config.property("db.redis.port").getString()}")
 
@@ -89,6 +91,7 @@ fun Application.module() {
         userSchema,
         tokenSchema,
         streamSchema,
+        eventSchema,
         hashingService,
         tokenService,
         postgresConnection,

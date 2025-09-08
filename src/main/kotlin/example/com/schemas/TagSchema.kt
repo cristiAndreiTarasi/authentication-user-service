@@ -1,130 +1,205 @@
 package example.com.schemas
 
+import example.com.routes.dtos.TagDto
+import example.com.schemas.queries.TagQueries.DELETE_STREAM_TAG
+import example.com.schemas.queries.TagQueries.INSERT_EVENT_TAG
+import example.com.schemas.queries.TagQueries.INSERT_STREAM_TAG
+import example.com.schemas.queries.TagQueries.INSERT_TAG
+import example.com.schemas.queries.TagQueries.SELECT_ALL_TAGS
+import example.com.schemas.queries.TagQueries.SELECT_TAGS_BY_EVENT_ID
+import example.com.schemas.queries.TagQueries.SELECT_TAGS_BY_STREAM_ID
+import example.com.schemas.queries.TagQueries.SELECT_TAG_BY_NAME
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 import java.sql.*
 
-@Serializable
-data class TagDto(
-    val id: Int? = null,
-    val name: String
-)
-
 class TagSchema(private val dbConnection: Connection) {
-    companion object {
-        private const val INSERT_TAG = "INSERT INTO tags (name) VALUES (?)"
-        private const val SELECT_TAG_BY_NAME = "SELECT id FROM tags WHERE name = ?"
-        private const val SELECT_ALL_TAGS = "SELECT * FROM tags"
-        private const val INSERT_STREAM_TAG = "INSERT INTO stream_tags (stream_id, tag_id) VALUES (?, ?)"
-        private const val DELETE_STREAM_TAG = "DELETE FROM stream_tags WHERE stream_id = ? AND tag_id = ?"
-        private const val COUNT_TAG_USAGE = "SELECT COUNT(*) FROM stream_tags WHERE tag_id = ?"
-        private const val DELETE_TAG = "DELETE FROM tags WHERE id = ?"
-        private const val SELECT_TAGS_BY_STREAM_ID = """
-            SELECT t.* 
-            FROM tags t 
-            JOIN stream_tags st ON t.id = st.tag_id 
-            WHERE st.stream_id = ?
-        """
+    // Insert tags for event using existing connection (transaction-friendly)
+    suspend fun insertTagsForEvent(eventId: Int, tags: List<TagDto>, connection: Connection) {
+        val stmt = connection.prepareStatement(INSERT_EVENT_TAG)
+        try {
+            for (tag in tags) {
+                val normalized = normalizeTagName(tag.name)
+                val tagId = tag.id ?: insertOrGetTagId(normalized, connection)
+                stmt.setInt(1, eventId)
+                stmt.setInt(2, tagId)
+                stmt.addBatch()
+            }
+            stmt.executeBatch()
+        } finally {
+            stmt.close()
+        }
     }
 
-    /*
-    * Insert a new tag
-    * */
-    suspend fun insertTag(name: String,): Int = dbQuery { connection ->
+    suspend fun insertTagsForStream(streamId: Int, tags: List<TagDto>) = dbQuery { connection ->
+        val stmt = connection.prepareStatement(INSERT_STREAM_TAG)
+        try {
+            for (tag in tags) {
+                val normalized = normalizeTagName(tag.name)
+                val tagId = tag.id ?: insertOrGetTagId(normalized, connection)
+                stmt.setInt(1, streamId)
+                stmt.setInt(2, tagId)
+                stmt.addBatch()
+            }
+            stmt.executeBatch()
+        } finally {
+            stmt.close()
+        }
+    }
+
+    fun insertTagsForStream(streamId: Int, tags: List<TagDto>, connection: Connection) {
+        val stmt = connection.prepareStatement(INSERT_STREAM_TAG)
+        try {
+            for (tag in tags) {
+                val normalized = normalizeTagName(tag.name)
+                val tagId = tag.id ?: insertOrGetTagId(normalized, connection)
+                stmt.setInt(1, streamId)
+                stmt.setInt(2, tagId)
+                stmt.addBatch()
+            }
+            stmt.executeBatch()
+        } finally {
+            stmt.close()
+        }
+    }
+
+
+    suspend fun getTagsByEventId(eventId: Int): List<TagDto> = dbQuery { connection ->
+        val stmt = connection.prepareStatement(SELECT_TAGS_BY_EVENT_ID)
+        try {
+            stmt.setInt(1, eventId)
+            val rs = stmt.executeQuery()
+            val list = mutableListOf<TagDto>()
+            while (rs.next()) {
+                list.add(TagDto(id = rs.getInt("id"), name = rs.getString("name")))
+            }
+            rs.close()
+            list
+        } finally {
+            stmt.close()
+        }
+    }
+
+    suspend fun getTagsByStreamId(streamId: Int): List<TagDto> = dbQuery { connection ->
+        val stmt = connection.prepareStatement(SELECT_TAGS_BY_STREAM_ID)
+        try {
+            stmt.setInt(1, streamId)
+            val rs = stmt.executeQuery()
+            val list = mutableListOf<TagDto>()
+            while (rs.next()) {
+                list.add(TagDto(id = rs.getInt("id"), name = rs.getString("name")))
+            }
+            rs.close()
+            list
+        } finally {
+            stmt.close()
+        }
+    }
+
+    suspend fun insertTag(name: String): Int = dbQuery { connection ->
+        insertTag(name, connection)
+    }
+
+    // transactional insertTag (select -> insert if missing)
+    // returns the id (existing or newly created)
+    fun insertTag(name: String, connection: Connection): Int {
+        val normalized = normalizeTagName(name)
+
+        // try select first
         val selectStatement = connection.prepareStatement(SELECT_TAG_BY_NAME)
-        selectStatement.setString(1, name)
-        val resultSet = selectStatement.executeQuery()
-
-        // If tag already exists, return it's id
-        if (resultSet.next()) {
-            return@dbQuery resultSet.getInt("id")
+        try {
+            selectStatement.setString(1, normalized)
+            val rs = selectStatement.executeQuery()
+            if (rs.next()) {
+                val id = rs.getInt("id")
+                rs.close()
+                return id
+            }
+            rs.close()
+        } finally {
+            selectStatement.close()
         }
 
-        //If tag doesn't exist, insert it
+        // insert new tag
         val insertStatement = connection.prepareStatement(INSERT_TAG, Statement.RETURN_GENERATED_KEYS)
-        insertStatement.setString(1, name)
-        insertStatement.executeUpdate()
-
-        val generatedKeys = insertStatement.generatedKeys
-        return@dbQuery if (generatedKeys.next()) {
-            generatedKeys.getInt(1)
-        } else {
-            throw Exception("Unable to retrieve the id of the newly inserted tag")
+        try {
+            insertStatement.setString(1, normalized)
+            insertStatement.executeUpdate()
+            val generatedKeys = insertStatement.generatedKeys
+            if (generatedKeys.next()) {
+                return generatedKeys.getInt(1)
+            } else {
+                throw Exception("Unable to retrieve the id of the newly inserted tag")
+            }
+        } finally {
+            insertStatement.close()
         }
     }
 
-    /*
-    * Link tags to a stream
-    * */
-    suspend fun insertTagsForStream(streamId: Int, tags: List<String>) = dbQuery { connection ->
-        val statement = connection.prepareStatement(INSERT_STREAM_TAG)
-
-        for (tag in tags) {
-            val tagId = insertTag(tag)
-
-            statement.setInt(1, streamId)
-            statement.setInt(2, tagId)
-            statement.addBatch()
-        }
-
-        statement.executeBatch()
-    }
+    fun insertOrGetTagId(name: String, connection: Connection): Int = insertTag(name, connection)
 
     suspend fun getAllTags(): List<TagDto> = dbQuery { connection ->
-        val statement = connection.prepareStatement(SELECT_ALL_TAGS)
-        val resultSet = statement.executeQuery()
-
-        val tags = mutableListOf<TagDto>()
-        while (resultSet.next()) {
-            tags.add(resultSet.toTagDataModel())
+        val stmt = connection.prepareStatement(SELECT_ALL_TAGS)
+        try {
+            val rs = stmt.executeQuery()
+            val tags = mutableListOf<TagDto>()
+            while (rs.next()) {
+                tags.add(rs.toTagDataModel())
+            }
+            rs.close()
+            tags
+        } finally {
+            stmt.close()
         }
-        return@dbQuery tags
     }
 
-    suspend fun getTagsByStreamId(streamId: Int): List<String> = dbQuery { connection ->
-        val statement = connection.prepareStatement(SELECT_TAGS_BY_STREAM_ID)
-        statement.setInt(1, streamId)
-
-        val resultSet = statement.executeQuery()
-        val tags = mutableListOf<String>()
-        while (resultSet.next()) {
-            tags.add(resultSet.getString("name"))
+    // delete tags for stream - transactional variant: accepts TagDto list (uses provided connection)
+    fun deleteTagsForStream(streamId: Int, tags: List<TagDto>, connection: Connection) {
+        val stmt = connection.prepareStatement(DELETE_STREAM_TAG)
+        try {
+            for (tag in tags) {
+                val normalized = normalizeTagName(tag.name)
+                val tagId = getTagIdByName(normalized, connection)
+                stmt.setInt(1, streamId)
+                stmt.setInt(2, tagId)
+                stmt.addBatch()
+            }
+            stmt.executeBatch()
+        } finally {
+            stmt.close()
         }
-        return@dbQuery tags
     }
 
-    /*
-    * Delete tags associated with a stream when the stream ends
-    * */
-    fun deleteTagsForStream(streamId: Int, tags: List<String>, connection: Connection) {
-        val deleteStatement = connection.prepareStatement(DELETE_STREAM_TAG)
-
-        for (tag in tags) {
-            val tagId = getTagIdByName(tag, connection)
-
-            // Remove the association between the stream and the tag
-            deleteStatement.setInt(1, streamId)
-            deleteStatement.setInt(2, tagId)
-            deleteStatement.addBatch()
-        }
-
-        // Execute batch updates
-        deleteStatement.executeBatch()
-    }
-
-    // Helper function to get the tag ID by name
+    // Helper function to get tag id by name using provided connection
     private fun getTagIdByName(tag: String, connection: Connection): Int {
+        val normalized = normalizeTagName(tag)
         val statement = connection.prepareStatement("SELECT id FROM tags WHERE name = ?")
-        statement.setString(1, tag)
-        val resultSet = statement.executeQuery()
-        return if (resultSet.next()) resultSet.getInt("id") else throw Exception("Tag not found: $tag")
+        try {
+            statement.setString(1, normalized)
+            val rs = statement.executeQuery()
+            if (rs.next()) {
+                val id = rs.getInt("id")
+                rs.close()
+                return id
+            } else {
+                rs.close()
+                throw Exception("Tag not found: $tag")
+            }
+        } finally {
+            statement.close()
+        }
     }
 
     private fun ResultSet.toTagDataModel(): TagDto {
         return TagDto(
+            id = getInt("id"),
             name = getString("name")
         )
+    }
+
+    private fun normalizeTagName(raw: String): String {
+        return raw.trim().trimStart('#')
     }
 
     private suspend fun <T> dbQuery(block: suspend (Connection) -> T): T = withContext(Dispatchers.IO) {
