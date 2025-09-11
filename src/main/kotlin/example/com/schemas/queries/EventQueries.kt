@@ -13,6 +13,29 @@ object EventQueries {
         WHERE e.id = ?
     """
 
+    const val SELECT_EVENTS_SUMMARY_BY_STARTS_ASC = """
+        SELECT e.id,
+               e.starts_at,
+               e.user_id,
+               u.username
+        FROM events e
+        JOIN users u ON u.id = e.user_id
+        WHERE (e.starts_at > COALESCE(?, TIMESTAMP '-infinity'))
+        ORDER BY e.starts_at ASC
+        LIMIT ?
+    """
+
+    const val SELECT_EVENTS_SUMMARY_BY_POPULARITY_DESC = """
+        SELECT e.id,
+               e.starts_at,
+               e.user_id,
+               u.username
+        FROM events e
+        JOIN users u ON u.id = e.user_id
+        ORDER BY e.created_at DESC
+        LIMIT ?
+    """
+
     const val SELECT_EVENTS_CURSOR = """
         SELECT e.*, u.username
         FROM events e

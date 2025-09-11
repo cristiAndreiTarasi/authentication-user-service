@@ -2,6 +2,7 @@ package example.com.schemas
 
 import example.com.PrivacyOptions
 import example.com.routes.dtos.EventDto
+import example.com.routes.dtos.EventSummary
 import example.com.schemas.queries.EventQueries
 import example.com.services.gridfs.GridFSService
 import kotlinx.coroutines.Dispatchers
@@ -51,6 +52,45 @@ class EventSchema(
         } else {
             throw Exception("Failed to create event")
         }
+    }
+
+    suspend fun fetchEventSummaries(
+        limit: Int,
+        sort: String,
+        cursor: kotlinx.datetime.LocalDateTime? = null
+    ): List<EventSummary> = dbQuery { connection ->
+        val sql = when (sort) {
+            "popular" -> EventQueries.SELECT_EVENTS_SUMMARY_BY_POPULARITY_DESC
+            else -> EventQueries.SELECT_EVENTS_SUMMARY_BY_STARTS_ASC
+        }
+
+        val stmt = connection.prepareStatement(sql)
+
+        if (sql == EventQueries.SELECT_EVENTS_SUMMARY_BY_STARTS_ASC) {
+            if (cursor != null) {
+                val ts = Timestamp.valueOf(cursor.toJavaLocalDateTime())
+                stmt.setTimestamp(1, ts)
+            } else {
+                stmt.setNull(1, Types.TIMESTAMP)
+            }
+            stmt.setInt(2, limit)
+        } else {
+            stmt.setInt(1, limit)
+        }
+
+        val rs = stmt.executeQuery()
+        val items = mutableListOf<EventSummary>()
+        while (rs.next()) {
+            items.add(
+                EventSummary(
+                    id = rs.getInt("id"),
+                    startsAt = rs.getTimestamp("starts_at")?.toLocalDateTime()?.toKotlinLocalDateTime(),
+                    userId = rs.getInt("user_id"),
+                    username = rs.getString("username")
+                )
+            )
+        }
+        items
     }
 
     suspend fun findById(eventId: Int): EventDto? = dbQuery { connection ->

@@ -7,6 +7,7 @@ import example.com.routes.dtos.CreateEventRequest
 import example.com.routes.dtos.CreateStreamResponse
 import example.com.routes.dtos.EventDto
 import example.com.routes.dtos.EventResponseDto
+import example.com.routes.dtos.EventSummaryDto
 import example.com.routes.dtos.StreamDto
 import example.com.schemas.EventSchema
 import example.com.schemas.StreamSchema
@@ -83,6 +84,28 @@ fun Route.eventRoutes(
                     )
                 )
             }
+        }
+
+        get("/events/summary") {
+            val limit = call.request.queryParameters["limit"]?.toIntOrNull() ?: 6
+            val sort = call.request.queryParameters["sort"] ?: "upcoming"
+
+            val events = eventSchema.fetchEventSummaries(limit = limit, sort = sort)
+
+            val response = events.map { eventSummary ->
+                // Create the avatar URL using the user ID
+                val avatarUrl = "/users/fetch/${eventSummary.userId}/avatar"
+
+                EventSummaryDto(
+                    id = eventSummary.id,
+                    userId = eventSummary.userId,
+                    username = eventSummary.username,
+                    userAvatarUrl = avatarUrl,
+                    startsAt = eventSummary.startsAt?.toString()
+                )
+            }
+
+            call.respond(HttpStatusCode.OK, response)
         }
 
         // Create event (multipart)

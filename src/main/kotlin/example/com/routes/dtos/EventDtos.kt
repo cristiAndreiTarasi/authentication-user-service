@@ -1,8 +1,8 @@
 package example.com.routes.dtos
 
 import example.com.PrivacyOptions
+import kotlinx.serialization.Serializable
 
-// Internal DTO used in schema layer
 data class EventDto(
     val id: Int? = null,
     val title: String,
@@ -20,8 +20,7 @@ data class EventDto(
     val updatedAt: kotlinx.datetime.LocalDateTime?
 )
 
-// Request object (deserialize metadata form item)
-@kotlinx.serialization.Serializable
+@Serializable
 data class CreateEventRequest(
     val title: String,
     val description: String? = null,
@@ -34,7 +33,6 @@ data class CreateEventRequest(
     val startsAt: String? = null // ISO string; parse later if present
 )
 
-// Response DTO
 data class EventResponseDto(
     val id: Int,
     val title: String,
@@ -51,4 +49,32 @@ data class EventResponseDto(
     val status: String,
     val createdAt: kotlinx.datetime.LocalDateTime?,
     val updatedAt: kotlinx.datetime.LocalDateTime?
+)
+
+data class EventSummary(
+    val id: Int,
+    val startsAt: kotlinx.datetime.LocalDateTime?,
+    val userId: Int,
+    val username: String
+)
+
+// server/dto/EventSummaryDto.kt (serializable response)
+@Serializable
+data class EventSummaryDto(
+    val id: Int,
+    val userId: Int,
+    val username: String,
+    val userAvatarUrl: String?,
+    val startsAt: String?
+)
+
+@Serializable
+data class EventSummaryResponseDto(
+    val id: Int,
+    val title: String,
+    val username: String? = null,
+    val userAvatarUrl: String? = null,
+    val startsAt: kotlinx.datetime.LocalDateTime? = null,
+    val thumbnailUrl: String? = null,
+    val likesCount: Int = 0
 )
