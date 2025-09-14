@@ -3,12 +3,14 @@ package example.com.routes.dtos
 import example.com.PrivacyOptions
 import kotlinx.serialization.Serializable
 
+@Serializable
 data class EventDto(
     val id: Int? = null,
     val title: String,
     val description: String?,
     val userId: Int,
     val username: String? = null,
+    val userAvatarUrl: String? = null,
     val privacyType: PrivacyOptions,
     val ticketPriceCents: Long = 0L,
     var categories: List<CategoryDto>? = null,
@@ -33,18 +35,21 @@ data class CreateEventRequest(
     val startsAt: String? = null // ISO string; parse later if present
 )
 
+@Serializable
 data class EventResponseDto(
     val id: Int,
     val title: String,
     val description: String?,
     val userId: Int,
     val username: String?,
+    val userOccupation: String?,
+    val userAvatarUrl: String?,
     val privacyType: PrivacyOptions,
     val ticketPriceCents: Long,
     val categories: List<CategoryDto> = emptyList(),
     val tags: List<TagDto> = emptyList(),
     val thumbnailId: String?,
-    val thumbnailData: String? = null, // base64 data URL optional
+    val thumbnailUrl: String? = null,
     val startsAt: kotlinx.datetime.LocalDateTime?,
     val status: String,
     val createdAt: kotlinx.datetime.LocalDateTime?,

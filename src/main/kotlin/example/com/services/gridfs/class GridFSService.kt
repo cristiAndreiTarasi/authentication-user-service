@@ -60,6 +60,8 @@ interface IGridFSService {
     suspend fun getAvatarIdByUserId(userId: Int): String?
 
     suspend fun getThumbnailIdByUserId(userId: Int): String?
+
+    suspend fun getEventThumbnailIdByEventId(eventId: Int): String?
 }
 
 class GridFSService(
@@ -69,9 +71,22 @@ class GridFSService(
     companion object {
         private const val SELECT_AVATAR_ID = "SELECT image_id FROM users WHERE id = ?"
         private const val SELECT_THUMBNAIL_ID = "SELECT thumbnail_id FROM streams WHERE id = ?"
+        private const val SELECT_EVENT_THUMBNAIL_ID = "SELECT thumbnail_id FROM events WHERE id = ?"
     }
 
     private val gridFSBuckets = GridFSBuckets.create(mongoDatabase, "images")
+
+    override suspend fun getEventThumbnailIdByEventId(eventId: Int): String? = withContext(Dispatchers.IO) {
+        val statement = psqlConnection.prepareStatement(SELECT_EVENT_THUMBNAIL_ID)
+        statement.setInt(1, eventId)
+        val resultSet = statement.executeQuery()
+
+        if (resultSet.next()) {
+            resultSet.getString("thumbnail_id")
+        } else {
+            null
+        }
+    }
 
     override suspend fun uploadImage(
         userId: Int,

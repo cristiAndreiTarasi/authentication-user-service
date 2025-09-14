@@ -13,6 +13,7 @@ import example.com.schemas.EventSchema
 import example.com.schemas.StreamSchema
 import example.com.schemas.UserSchema
 import example.com.services.gridfs.GridFSService
+import io.ktor.http.ContentType
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.content.PartData
 import io.ktor.http.content.forEachPart
@@ -24,6 +25,7 @@ import io.ktor.server.auth.jwt.JWTPrincipal
 import io.ktor.server.auth.principal
 import io.ktor.server.request.receiveMultipart
 import io.ktor.server.response.respond
+import io.ktor.server.response.respondBytes
 import io.ktor.server.routing.*
 import kotlinx.datetime.Clock
 import kotlinx.datetime.TimeZone
@@ -54,14 +56,16 @@ fun Route.eventRoutes(
             if (event == null) {
                 call.respond(HttpStatusCode.NotFound, "Event not found")
             } else {
-                val thumbnailData = event.thumbnailId?.let {
+                /*val thumbnailData = event.thumbnailId?.let {
                     try {
                         val bytes = gridFSService.fetchImage(ObjectId(it))
                         if (bytes.isNotEmpty()) "data:image/jpeg;base64," + Base64.getEncoder().encodeToString(bytes) else null
                     } catch (_: Exception) {
                         null
                     }
-                }
+                }*/
+
+                val user = userSchema.findById(event.userId)
 
                 call.respond(
                     HttpStatusCode.OK,
@@ -71,18 +75,42 @@ fun Route.eventRoutes(
                         description = event.description,
                         userId = event.userId,
                         username = event.username,
+                        userOccupation = user?.occupation,
+                        userAvatarUrl = "/users/fetch/${event.userId}/avatar",
                         privacyType = event.privacyType,
                         ticketPriceCents = event.ticketPriceCents,
                         categories = event.categories ?: emptyList(),
                         tags = event.tags ?: emptyList(),
                         thumbnailId = event.thumbnailId,
-                        thumbnailData = thumbnailData,
+                        thumbnailUrl = "/events/${event.id}/thumbnail",
                         startsAt = event.startsAt,
                         status = event.status,
                         createdAt = event.createdAt,
                         updatedAt = event.updatedAt
                     )
                 )
+            }
+        }
+
+        get("/events/{eventId}/thumbnail") {
+            val eventId = call.parameters["eventId"]?.toIntOrNull()
+                ?: return@get call.respond(HttpStatusCode.BadRequest, "Event ID is missing")
+
+            // Fetch the image ID associated with the event ID from the database
+            val imageIdString = gridFSService.getEventThumbnailIdByEventId(eventId)
+                ?: return@get call.respond(HttpStatusCode.NotFound, "Image not found for event")
+
+            val imageId = try {
+                ObjectId(imageIdString)
+            } catch (e: IllegalArgumentException) {
+                return@get call.respond(HttpStatusCode.BadRequest, "Invalid Image ID")
+            }
+
+            val imageBytes = gridFSService.fetchImage(imageId)
+            if (imageBytes.isNotEmpty()) {
+                call.respondBytes(imageBytes, ContentType.Image.JPEG)
+            } else {
+                call.respond(HttpStatusCode.NotFound, "Image not found")
             }
         }
 
@@ -93,14 +121,11 @@ fun Route.eventRoutes(
             val events = eventSchema.fetchEventSummaries(limit = limit, sort = sort)
 
             val response = events.map { eventSummary ->
-                // Create the avatar URL using the user ID
-                val avatarUrl = "/users/fetch/${eventSummary.userId}/avatar"
-
                 EventSummaryDto(
                     id = eventSummary.id,
                     userId = eventSummary.userId,
                     username = eventSummary.username,
-                    userAvatarUrl = avatarUrl,
+                    userAvatarUrl = "/users/fetch/${eventSummary.userId}/avatar",
                     startsAt = eventSummary.startsAt?.toString()
                 )
             }
@@ -212,12 +237,14 @@ fun Route.eventRoutes(
                     description = created.description,
                     userId = created.userId,
                     username = created.username,
+                    userOccupation = null,
+                    userAvatarUrl = created.userAvatarUrl,
                     privacyType = created.privacyType,
                     ticketPriceCents = created.ticketPriceCents,
                     categories = created.categories ?: emptyList(),
                     tags = created.tags ?: emptyList(),
                     thumbnailId = created.thumbnailId,
-                    thumbnailData = null,
+                    thumbnailUrl = null,
                     startsAt = created.startsAt,
                     status = created.status,
                     createdAt = created.createdAt,

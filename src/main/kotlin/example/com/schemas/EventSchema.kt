@@ -26,7 +26,7 @@ class EventSchema(
         stmt.setInt(3, event.userId)
         stmt.setString(4, event.privacyType.displayName)
         stmt.setLong(5, event.ticketPriceCents)
-        stmt.setString(6, event.thumbnailId)
+        stmt.setString(6, event.thumbnailId) // remove this
 
         if (event.startsAt != null) {
             stmt.setTimestamp(7, Timestamp.valueOf(event.startsAt.toJavaLocalDateTime()))
@@ -108,7 +108,7 @@ class EventSchema(
                 ticketPriceCents = rs.getLong("ticket_price"),
                 categories = emptyList(),
                 tags = emptyList(),
-                thumbnailId = rs.getString("thumbnail_id"),
+                thumbnailId = rs.getString("thumbnail_id"), //remove this
                 startsAt = rs.getTimestamp("starts_at")?.toLocalDateTime()?.toKotlinLocalDateTime(),
                 status = rs.getString("status"),
                 createdAt = rs.getTimestamp("created_at")?.toLocalDateTime()?.toKotlinLocalDateTime(),
