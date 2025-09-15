@@ -20,6 +20,7 @@ import io.ktor.http.content.forEachPart
 import io.ktor.http.content.streamProvider
 import io.ktor.server.routing.Route
 import io.ktor.server.application.call
+import io.ktor.server.application.log
 import io.ktor.server.auth.authenticate
 import io.ktor.server.auth.jwt.JWTPrincipal
 import io.ktor.server.auth.principal
@@ -252,6 +253,33 @@ fun Route.eventRoutes(
                 )
             )
         }
+
+        get("/users/{id}/events") {
+            val userId = call.parameters["id"]?.toIntOrNull()
+            if (userId == null) {
+                call.respond(HttpStatusCode.BadRequest, "Invalid user id")
+                return@get
+            }
+
+            try {
+                val summaries = eventSchema.fetchEventsByUser(userId)
+
+                val response = summaries.map { s ->
+                    EventSummaryDto(
+                        id = s.id,
+                        userId = s.userId,
+                        username = s.username ?: "Unknown",
+                        userAvatarUrl = "/users/fetch/${s.userId}/avatar", // relative
+                        startsAt = s.startsAt?.toString()
+                    )
+                }
+
+                call.respond(HttpStatusCode.OK, response)
+            } catch (e: Exception) {
+                call.respond(HttpStatusCode.InternalServerError, "Failed to fetch user events")
+            }
+        }
+
 
         // Start event server-side (server creates a streams row from event metadata)
         post("/events/{id}/start") {

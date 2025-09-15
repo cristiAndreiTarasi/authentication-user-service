@@ -13,6 +13,17 @@ object EventQueries {
         WHERE e.id = ?
     """
 
+    const val SELECT_EVENTS_BY_USER = """
+        SELECT e.id,
+               e.starts_at,
+               e.user_id,
+               u.username
+        FROM events e
+        JOIN users u ON u.id = e.user_id
+        WHERE e.user_id = ?
+        ORDER BY e.starts_at DESC
+    """
+
     const val SELECT_EVENTS_SUMMARY_BY_STARTS_ASC = """
         SELECT e.id,
                e.starts_at,

@@ -56,13 +56,6 @@ data class EventResponseDto(
     val updatedAt: kotlinx.datetime.LocalDateTime?
 )
 
-data class EventSummary(
-    val id: Int,
-    val startsAt: kotlinx.datetime.LocalDateTime?,
-    val userId: Int,
-    val username: String
-)
-
 // server/dto/EventSummaryDto.kt (serializable response)
 @Serializable
 data class EventSummaryDto(

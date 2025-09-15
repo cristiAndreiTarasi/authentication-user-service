@@ -2,7 +2,7 @@ package example.com.schemas
 
 import example.com.PrivacyOptions
 import example.com.routes.dtos.EventDto
-import example.com.routes.dtos.EventSummary
+import example.com.routes.models.EventSummary
 import example.com.schemas.queries.EventQueries
 import example.com.services.gridfs.GridFSService
 import kotlinx.coroutines.Dispatchers
@@ -91,6 +91,25 @@ class EventSchema(
             )
         }
         items
+    }
+
+    suspend fun fetchEventsByUser(userId: Int): List<EventSummary> = dbQuery { connection ->
+        val stmt = connection.prepareStatement(EventQueries.SELECT_EVENTS_BY_USER)
+        stmt.setInt(1, userId)
+        val rs = stmt.executeQuery()
+
+        val out = mutableListOf<EventSummary>()
+        while (rs.next()) {
+            out.add(
+                EventSummary(
+                    id = rs.getInt("id"),
+                    startsAt = rs.getTimestamp("starts_at")?.toLocalDateTime()?.toKotlinLocalDateTime(),
+                    userId = rs.getInt("user_id"),
+                    username = rs.getString("username")
+                )
+            )
+        }
+        out
     }
 
     suspend fun findById(eventId: Int): EventDto? = dbQuery { connection ->
