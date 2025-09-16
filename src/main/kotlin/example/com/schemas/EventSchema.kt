@@ -16,7 +16,6 @@ class EventSchema(
     private val dbConnection: Connection,
     private val categorySchema: CategorySchema,
     private val tagSchema: TagSchema,
-    private val gridFSService: GridFSService
 ) {
     suspend fun createEvent(event: EventDto): Int = dbQuery { connection ->
         val stmt = connection.prepareStatement(EventQueries.INSERT_EVENT, Statement.RETURN_GENERATED_KEYS)

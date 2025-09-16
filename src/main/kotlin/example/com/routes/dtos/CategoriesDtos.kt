@@ -8,3 +8,9 @@ data class CategoryDto(
     val name: String,
     val imageUrl: String? = null
 )
+
+@Serializable
+data class CreateCategoryRequestDto(
+    val name: String,
+    val imageUrl: String? = null
+)

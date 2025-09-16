@@ -70,7 +70,7 @@ fun Application.module() {
     val categorySchema = CategorySchema(postgresConnection)
     val tagSchema = TagSchema(postgresConnection)
     val streamSchema = StreamSchema(postgresConnection, categorySchema, tagSchema, gridFsService)
-    val eventSchema = EventSchema(postgresConnection, categorySchema, tagSchema, gridFsService)
+    val eventSchema = EventSchema(postgresConnection, categorySchema, tagSchema)
 
     val redisManager = RedisManager("redis://${environment.config.property("db.redis.host").getString()}:${environment.config.property("db.redis.port").getString()}")
 
@@ -92,6 +92,8 @@ fun Application.module() {
         tokenSchema,
         streamSchema,
         eventSchema,
+        tagSchema,
+        categorySchema,
         hashingService,
         tokenService,
         postgresConnection,

@@ -280,7 +280,6 @@ fun Route.eventRoutes(
             }
         }
 
-
         // Start event server-side (server creates a streams row from event metadata)
         post("/events/{id}/start") {
             val principal = call.principal<JWTPrincipal>()
