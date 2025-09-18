@@ -147,6 +147,16 @@ fun Route.streamRoutes(
                     return@post
                 }
 
+                if (streamMetaData!!.title.length > 255) {
+                    call.respond(HttpStatusCode.BadRequest, "Title must be 255 characters or less")
+                    return@post
+                }
+
+                if (streamMetaData!!.description != null && streamMetaData!!.description!!.length > 255) {
+                    call.respond(HttpStatusCode.BadRequest, "Description must be 255 characters or less")
+                    return@post
+                }
+
                 // If there's an image, upload it and get the thumbnailId
                 val thumbnailId: String? = thumbnailContent?.let { rawImage ->
                     gridFSService.uploadImage(
