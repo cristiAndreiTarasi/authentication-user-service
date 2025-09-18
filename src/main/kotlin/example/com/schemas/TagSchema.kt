@@ -1,6 +1,7 @@
 package example.com.schemas
 
 import example.com.routes.dtos.TagDto
+import example.com.schemas.queries.TagQueries.DELETE_EVENT_TAG_BY_EVENT
 import example.com.schemas.queries.TagQueries.DELETE_STREAM_TAG
 import example.com.schemas.queries.TagQueries.INSERT_EVENT_TAG
 import example.com.schemas.queries.TagQueries.INSERT_STREAM_TAG
@@ -45,6 +46,14 @@ class TagSchema(private val dbConnection: Connection) {
             stmt.executeBatch()
         } finally {
             stmt.close()
+        }
+    }
+
+    suspend fun deleteTagsForEvent(eventId: Int): Int = dbQuery { connection ->
+        val stmt = connection.prepareStatement(DELETE_EVENT_TAG_BY_EVENT)
+        stmt.use { st ->
+            st.setInt(1, eventId)
+            st.executeUpdate()
         }
     }
 

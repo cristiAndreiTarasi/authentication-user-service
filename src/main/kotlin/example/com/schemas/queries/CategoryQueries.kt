@@ -21,4 +21,5 @@ object CategoryQueries {
         JOIN event_categories ec ON c.id = ec.category_id
         WHERE ec.event_id = ?
     """
+    const val DELETE_EVENT_CATEGORY_BY_EVENT = "DELETE FROM event_categories WHERE event_id = ?"
 }

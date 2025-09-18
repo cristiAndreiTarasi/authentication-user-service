@@ -2,6 +2,7 @@ package example.com.schemas
 
 import example.com.routes.dtos.CategoryDto
 import example.com.schemas.queries.CategoryQueries
+import example.com.schemas.queries.CategoryQueries.DELETE_EVENT_CATEGORY_BY_EVENT
 import example.com.schemas.queries.CategoryQueries.DELETE_STREAM_CATEGORY
 import example.com.schemas.queries.CategoryQueries.INSERT_CATEGORY
 import example.com.schemas.queries.CategoryQueries.INSERT_EVENT_CATEGORY
@@ -21,7 +22,11 @@ import java.sql.Statement
 class CategorySchema(private val dbConnection: Connection) {
 
     // --- event helpers (use an external connection to participate in transaction) ---
-    suspend fun insertCategoriesForEvent(eventId: Int, categories: List<CategoryDto>, connection: Connection) {
+    suspend fun insertCategoriesForEvent(
+        eventId: Int,
+        categories: List<CategoryDto>,
+        connection: Connection
+    ) {
         val stmt = connection.prepareStatement(INSERT_EVENT_CATEGORY)
         stmt.use { stmt ->
             for (category in categories) {
@@ -99,6 +104,14 @@ class CategorySchema(private val dbConnection: Connection) {
             statement.executeBatch()
         } finally {
             statement.close()
+        }
+    }
+
+    suspend fun deleteCategoriesForEvent(eventId: Int): Int = dbQuery { connection ->
+        val stmt = connection.prepareStatement(DELETE_EVENT_CATEGORY_BY_EVENT)
+        stmt.use { st ->
+            st.setInt(1, eventId)
+            st.executeUpdate()
         }
     }
 

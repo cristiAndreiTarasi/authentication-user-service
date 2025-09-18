@@ -53,6 +53,35 @@ class EventSchema(
         }
     }
 
+    suspend fun deleteEventCompletely(eventId: Int): Boolean = dbQuery { connection ->
+        try {
+            connection.autoCommit = false
+
+            // delete event -> category links
+            categorySchema.deleteCategoriesForEvent(eventId)
+            // delete event -> tag links
+            tagSchema.deleteTagsForEvent(eventId)
+
+            // delete event row
+            val deleteStmt = connection.prepareStatement(EventQueries.DELETE_EVENT)
+            try {
+                deleteStmt.setInt(1, eventId)
+                val rows = deleteStmt.executeUpdate()
+                if (rows == 0) throw Exception("Event deletion affected 0 rows")
+            } finally {
+                try { deleteStmt.close() } catch (_: Exception) {}
+            }
+
+            connection.commit()
+            true
+        } catch (e: Exception) {
+            try { connection.rollback() } catch (_: Exception) {}
+            throw e
+        } finally {
+            try { connection.autoCommit = true } catch (_: Exception) {}
+        }
+    }
+
     suspend fun fetchEventSummaries(
         limit: Int,
         sort: String,

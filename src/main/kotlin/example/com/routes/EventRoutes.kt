@@ -351,5 +351,49 @@ fun Route.eventRoutes(
                 )
             )
         }
+
+        delete("/events/{id}") {
+            val principal = call.principal<JWTPrincipal>()
+            if (principal == null) {
+                call.respond(HttpStatusCode.Unauthorized, "Missing token")
+                return@delete
+            }
+            val userIdFromToken = principal.payload.getClaim("userId")?.asInt()
+                ?: principal.payload.getClaim("userId")?.asString()?.toIntOrNull()
+            if (userIdFromToken == null) {
+                call.respond(HttpStatusCode.Unauthorized, "Missing token user id")
+                return@delete
+            }
+
+            val id = call.parameters["id"]?.toIntOrNull()
+            if (id == null) {
+                call.respond(HttpStatusCode.BadRequest, "Invalid event id")
+                return@delete
+            }
+
+            val event = eventSchema.findById(id)
+            if (event == null) {
+                call.respond(HttpStatusCode.NotFound, "Event not found")
+                return@delete
+            }
+
+            // only owner can delete
+            if (event.userId != userIdFromToken) {
+                call.respond(HttpStatusCode.Forbidden, "Not owner of the event")
+                return@delete
+            }
+
+            try {
+                val deleted = eventSchema.deleteEventCompletely(id)
+                if (deleted) {
+                    // optional: remove thumbnail from GridFS if you want (provided you saved thumbnailId)
+                    call.respond(HttpStatusCode.OK)
+                } else {
+                    call.respond(HttpStatusCode.InternalServerError, "Failed to delete event")
+                }
+            } catch (e: Exception) {
+                call.respond(HttpStatusCode.InternalServerError, "Failed to delete event: ${e.message}")
+            }
+        }
     }
 }

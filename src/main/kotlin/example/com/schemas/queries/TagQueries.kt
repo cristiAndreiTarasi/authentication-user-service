@@ -21,4 +21,6 @@ object TagQueries {
         JOIN event_tags et ON t.id = et.tag_id
         WHERE et.event_id = ?
     """
+    const val DELETE_EVENT_TAG_BY_EVENT = "DELETE FROM event_tags WHERE event_id = ?"
+
 }
