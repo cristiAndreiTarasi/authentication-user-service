@@ -29,7 +29,7 @@ interface ITokenService {
 }
 
 // Generates a JWT token using the provided configuration and claims
-class TokenService(private val tokenConfig: TokenConfig) : ITokenService {
+class TokenService(val tokenConfig: TokenConfig) : ITokenService {
     override fun generateAccessToken(claims: List<TokenClaim>, timezone: String): String {
         val date = ZonedDateTime
             .now(ZoneId.of(timezone))

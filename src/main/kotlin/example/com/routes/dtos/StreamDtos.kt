@@ -13,31 +13,41 @@ data class StreamDto(
     val username: String,
     val privacyType: PrivacyOptions,
     val ticketPrice: Float,
-    var categories: List<CategoryDto>,
-    var tags: List<TagDto>,
+    var categories: List<CategoryDto> = emptyList(),
+    var tags: List<TagDto> = emptyList(),
+    val streamKey: String? = null,
+    val publishTokenJti: String? = null,
+    val tokenExpiresAt: LocalDateTime? = null,
     val startsAt: LocalDateTime? = null,
     val createdAt: LocalDateTime,
+    val endedAt: LocalDateTime? = null,
+    val status: String? = null,
     val thumbnailId: String? = null,
-    var thumbnailData: String? = null
+    var thumbnailData: String? = null,
 )
 
 @Serializable
-data class CreateStreamRequest(
+data class CreateStreamRequestDto(
     val title: String,
     val description: String? = null,
     val userId: Int,
     val privacyType: PrivacyOptions,
     val ticketPrice: Float,
-    val categories: List<CategoryDto>,
-    val tags: List<TagDto>,
+    val categories: List<CategoryDto> = emptyList(),
+    val tags: List<TagDto> = emptyList(),
     val timezoneId: String,
     val thumbnailId: String? = null,
     val startsAt: LocalDateTime? = null
 )
 
+
 @Serializable
-data class CreateStreamResponse(
+data class CreateStreamResponseDto(
     val streamId: Int? = null,
+    val streamKey: String? = null,
+    val publishToken: String? = null,
+    val publishTokenJti: String? = null,
+    val expiresAt: String? = null,
     val message: String? = null,
     val isLive: Boolean? = null
 )
@@ -57,17 +67,15 @@ data class StreamResponseDto(
     val username: String,
     val privacyType: PrivacyOptions,
     val ticketPrice: Float,
-    val categories: List<CategoryDto>,
-    val tags: List<TagDto>,
+    val categories: List<CategoryDto> = emptyList(),
+    val tags: List<TagDto> = emptyList(),
+    val streamKey: String? = null,
+    val publishTokenJti: String? = null,
+    val tokenExpiresAt: LocalDateTime? = null,
+    val startsAt: LocalDateTime? = null,
     val createdAt: LocalDateTime,
+    val endedAt: LocalDateTime? = null,
+    val status: String? = null,
     val thumbnailId: String? = null,
     var thumbnailData: String? = null
-)
-
-@Serializable
-data class PaginatedStreamsResponse(
-    val streams: List<StreamResponseDto>,
-    val page: Int,
-    val pageSize: Int,
-    val totalStreams: Int
 )

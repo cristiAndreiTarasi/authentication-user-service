@@ -36,10 +36,10 @@ fun Application.configureRouting(
     routing {
         authenticationRoutes(userSchema, tokenSchema, hashingService, tokenService)
         userRoutes(userSchema, tokenSchema, postgresConnection, gridFSService)
-        streamRoutes(streamSchema, gridFSService, userSchema)
+        streamRoutes(streamSchema, gridFSService, tokenService, userSchema)
         eventRoutes(eventSchema, gridFSService, userSchema, streamSchema)
         tagRoutes(tagSchema)
         categoryRoutes(categorySchema)
-        srsHttpHookRoutes(userSchema, tokenService)
+        srsHttpHookRoutes(userSchema, tokenService, streamSchema)
     }
 }

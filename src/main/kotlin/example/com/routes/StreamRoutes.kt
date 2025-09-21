@@ -2,14 +2,16 @@ package example.com.routes
 
 import example.com.PartDataItems
 import example.com.UserRole
-import example.com.routes.dtos.CreateStreamRequest
-import example.com.routes.dtos.CreateStreamResponse
+import example.com.routes.dtos.CreateStreamRequestDto
+import example.com.routes.dtos.CreateStreamResponseDto
 import example.com.routes.dtos.DeleteStreamResponse
-import example.com.routes.dtos.StreamResponseDto
 import example.com.routes.dtos.StreamDto
+import example.com.routes.dtos.StreamResponseDto
 import example.com.schemas.StreamSchema
 import example.com.schemas.UserSchema
 import example.com.services.gridfs.GridFSService
+import example.com.services.token.TokenClaim
+import example.com.services.token.TokenService
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.content.PartData
 import io.ktor.http.content.forEachPart
@@ -25,23 +27,22 @@ import io.ktor.server.routing.delete
 import io.ktor.server.routing.get
 import io.ktor.server.routing.post
 import kotlinx.datetime.Clock
+import kotlinx.datetime.Instant
 import kotlinx.datetime.TimeZone
 import kotlinx.datetime.toKotlinLocalDateTime
 import kotlinx.datetime.toLocalDateTime
 import kotlinx.serialization.json.Json
 import net.coobird.thumbnailator.Thumbnails
 import org.bson.types.ObjectId
-import org.litote.kmongo.currentDate
-import java.io.ByteArrayInputStream
-import java.io.ByteArrayOutputStream
 import java.time.LocalDateTime
 import java.time.format.DateTimeParseException
-import java.util.Base64
+import java.util.UUID
 
 fun Route.streamRoutes(
     streamSchema: StreamSchema,
     gridFSService: GridFSService,
-    userSchema: UserSchema
+    tokenService: TokenService,
+    userSchema: UserSchema,
 ) {
     authenticate("auth-jwt") {
         // Route to get a specific stream by ID
@@ -109,115 +110,171 @@ fun Route.streamRoutes(
             call.respond(HttpStatusCode.OK, streams.map { it.toStreamResponse() })
         }
 
+
         post("/streams/start") {
             val principal = call.principal<JWTPrincipal>()
             val role = principal?.payload?.getClaim("role")?.asString()
 
-            if (role == UserRole.OWNER.roleName) {
-                val multipartData = call.receiveMultipart()
-
-                var streamMetaData: CreateStreamRequest? = null
-                var thumbnailContent: ByteArray? = null
-
-                multipartData.forEachPart { part ->
-                    when (part) {
-                        is PartData.FormItem -> {
-                            if (part.name == PartDataItems.METADATA.displayName) {
-                                // Deserialize the metadata from JSON string
-                                streamMetaData = Json.decodeFromString(
-                                    CreateStreamRequest.serializer(),
-                                    part.value
-                                )
-                            }
-                        }
-
-                        is PartData.FileItem -> {
-                            if (part.name == PartDataItems.THUMBNAIL.displayName) {
-                                // Process the thumbnail image file
-                                thumbnailContent = part.streamProvider().readBytes()
-                            }
-                        }
-
-                        else -> part.dispose()
-                    }
-                }
-
-                if (streamMetaData == null) {
-                    call.respond(HttpStatusCode.BadRequest, "Stream metadata is missing.")
-                    return@post
-                }
-
-                if (streamMetaData!!.title.length > 255) {
-                    call.respond(HttpStatusCode.BadRequest, "Title must be 255 characters or less")
-                    return@post
-                }
-
-                if (streamMetaData!!.description != null && streamMetaData!!.description!!.length > 255) {
-                    call.respond(HttpStatusCode.BadRequest, "Description must be 255 characters or less")
-                    return@post
-                }
-
-                // If there's an image, upload it and get the thumbnailId
-                val thumbnailId: String? = thumbnailContent?.let { rawImage ->
-                    gridFSService.uploadImage(
-                        streamMetaData!!.userId,
-                        rawImage,
-                        transformation = { data ->
-                            val inputStream = ByteArrayInputStream(data)
-                            val outputStream = ByteArrayOutputStream()
-
-                            Thumbnails.of(inputStream)
-                                .size(180, 320)
-                                .keepAspectRatio(true)
-                                .outputFormat("jpg")
-                                .outputQuality(0.8)
-                                .toOutputStream(outputStream)
-
-                            // Return the transformed image as a ByteArray.
-                            outputStream.toByteArray()
-                        }
-                    ).toHexString()
-                }
-
-                val timezone = TimeZone.of(streamMetaData!!.timezoneId)
-
-                val user = userSchema.findById(streamMetaData!!.userId)
-                if (user == null) {
-                    call.respond(HttpStatusCode.BadRequest, "User not found.")
-                    return@post
-                }
-
-                val stream = StreamDto(
-                    title = streamMetaData!!.title,
-                    description = streamMetaData!!.description,
-                    userId = streamMetaData!!.userId,
-                    username = user.username,
-                    privacyType = streamMetaData!!.privacyType,
-                    ticketPrice = streamMetaData!!.ticketPrice,
-                    categories = streamMetaData!!.categories,
-                    tags = streamMetaData!!.tags,
-                    thumbnailId = thumbnailId,
-                    startsAt = streamMetaData!!.startsAt,
-                    createdAt = Clock.System.now().toLocalDateTime(timezone),
-                )
-
-                val streamId = streamSchema.create(stream)
-                call.respond(
-                    HttpStatusCode.Created,
-                    CreateStreamResponse(
-                        streamId = streamId,
-                        isLive = user.isLive
-                    )
-                )
-            } else {
+            if (role != UserRole.OWNER.roleName) {
                 call.respond(
                     HttpStatusCode.Forbidden,
-                    CreateStreamResponse(
-                        message = "You do not have access to this resource.",
-                    )
+                    CreateStreamResponseDto(message = "You do not have access to this resource.")
                 )
+                return@post
             }
+
+            // receive multipart
+            val multipart = call.receiveMultipart()
+            var streamMetaData: CreateStreamRequestDto? = null
+            var thumbnailContent: ByteArray? = null
+
+            multipart.forEachPart { part ->
+                when (part) {
+                    is PartData.FormItem -> {
+                        if (part.name == PartDataItems.METADATA.displayName) {
+                            streamMetaData = Json.decodeFromString(
+                                CreateStreamRequestDto.serializer(),
+                                part.value
+                            )
+                        }
+                    }
+                    is PartData.FileItem -> {
+                        if (part.name == PartDataItems.THUMBNAIL.displayName) {
+                            thumbnailContent = part.streamProvider().readBytes()
+                        }
+                    }
+                    else -> part.dispose()
+                }
+                part.dispose()
+            }
+
+            if (streamMetaData == null) {
+                call.respond(HttpStatusCode.BadRequest, "Stream metadata is missing.")
+                return@post
+            }
+
+            // Basic validations
+            if (streamMetaData!!.title.length > 255) {
+                call.respond(HttpStatusCode.BadRequest, "Title must be 255 characters or less")
+                return@post
+            }
+            if (streamMetaData!!.description != null && streamMetaData!!.description!!.length > 255) {
+                call.respond(HttpStatusCode.BadRequest, "Description must be 255 characters or less")
+                return@post
+            }
+
+            // Upload thumbnail if present
+            val thumbnailId: String? = thumbnailContent?.let { rawImage ->
+                gridFSService.uploadImage(
+                    streamMetaData!!.userId,
+                    rawImage,
+                    transformation = { data ->
+                        val inputStream = java.io.ByteArrayInputStream(data)
+                        val outputStream = java.io.ByteArrayOutputStream()
+
+                        Thumbnails.of(inputStream)
+                            .size(180, 320)
+                            .keepAspectRatio(true)
+                            .outputFormat("jpg")
+                            .outputQuality(0.8)
+                            .toOutputStream(outputStream)
+
+                        outputStream.toByteArray()
+                    }
+                ).toHexString()
+            }
+
+            // Use UTC for created_at to keep a canonical absolute time in DB
+            val createdAtUtc = Clock.System.now().toLocalDateTime(TimeZone.UTC)
+
+            // Validate user exists
+            val user = userSchema.findById(streamMetaData!!.userId)
+            if (user == null) {
+                call.respond(HttpStatusCode.BadRequest, "User not found.")
+                return@post
+            }
+
+            // Build StreamDto with createdAt in UTC (keep startsAt as provided; consider converting client-provided startsAt to UTC if needed)
+            val stream = StreamDto(
+                title = streamMetaData!!.title,
+                description = streamMetaData!!.description,
+                userId = streamMetaData!!.userId,
+                username = user.username,
+                privacyType = streamMetaData!!.privacyType,
+                ticketPrice = streamMetaData!!.ticketPrice,
+                categories = streamMetaData!!.categories,
+                tags = streamMetaData!!.tags,
+                thumbnailId = thumbnailId,
+                startsAt = streamMetaData!!.startsAt, // if client sends local wall-time, consider changing API to accept ISO Instants
+                createdAt = createdAtUtc
+            )
+
+            val streamId = streamSchema.create(stream)
+            val streamKey = UUID.randomUUID().toString()
+            val jti = UUID.randomUUID().toString()
+
+            val claims = listOf(
+                TokenClaim("userId", streamMetaData!!.userId.toString()),
+                TokenClaim("streamKey", streamKey),
+                TokenClaim("jti", jti)
+            )
+
+            // 1) Generate publish token (this should set exp inside the token)
+            val publishToken = tokenService.generateAccessToken(claims, streamMetaData!!.timezoneId)
+
+            // 2) Try to read the numeric exp claim from the token (seconds since epoch)
+            //    If tokenService.getClaimFromToken returns null for "exp", fallback to compute using tokenService.tokenConfig.accessExpiresIn
+            val expiresAtInstant: Instant = try {
+                val expClaimRaw = tokenService.getClaimFromToken(publishToken, "exp")
+                val expSeconds = expClaimRaw?.toLongOrNull()
+                if (expSeconds != null) {
+                    // JWT 'exp' is NumericDate (seconds since epoch)
+                    Instant.fromEpochSeconds(expSeconds)
+                } else {
+                    // Fallback: compute from now using TTL (assume tokenService.tokenConfig.accessExpiresIn is java.time.Duration)
+                    val ttlMillis = try {
+                        tokenService.tokenConfig.accessExpiresIn.toMillis()
+                    } catch (e: Exception) {
+                        // If tokenConfig isn't a java.time.Duration, as a final fallback use 5 minutes
+                        5 * 60 * 1000L
+                    }
+                    Instant.fromEpochMilliseconds(Clock.System.now().toEpochMilliseconds() + ttlMillis)
+                }
+            } catch (e: Exception) {
+                // Very defensive fallback — compute TTL of 5 minutes if anything unexpected happens
+                Instant.fromEpochMilliseconds(Clock.System.now().toEpochMilliseconds() + 5 * 60 * 1000L)
+            }
+
+            // 3) Persist publish info. Convert Instant -> LocalDateTime (UTC) to match your current StreamSchema.setPublishInfo signature
+            val expiresAtLocalUtc = expiresAtInstant.toLocalDateTime(TimeZone.UTC)
+
+            val persisted = try {
+                streamSchema.setPublishInfo(streamId, streamKey, jti, expiresAtInstant)
+            } catch (e: Exception) {
+                call.respond(HttpStatusCode.InternalServerError, "Failed to persist publish info")
+                return@post
+            }
+
+            if (!persisted) {
+                // optional: delete stream row to avoid an orphan (or mark), here we just return failure
+                call.respond(HttpStatusCode.InternalServerError, "Failed to persist publish info")
+                return@post
+            }
+
+            // 4) Return response: streamId, streamKey and publishToken and canonical expiry ISO instant
+            call.respond(
+                HttpStatusCode.Created,
+                CreateStreamResponseDto(
+                    streamId = streamId,
+                    streamKey = streamKey,
+                    publishToken = publishToken,
+                    // return an unambiguous instant string in UTC
+                    expiresAt = expiresAtInstant.toString(),
+                    isLive = false
+                )
+            )
         }
+
 
         // Route to delete a stream
         delete("/streams/delete/{streamId}") {
@@ -286,6 +343,7 @@ fun StreamDto.toStreamResponse(): StreamResponseDto {
         tags = tags,
         createdAt = createdAt,
         thumbnailId = thumbnailId,
-        thumbnailData = thumbnailData
+        thumbnailData = thumbnailData,
+        streamKey = streamKey
     )
 }

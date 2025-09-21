@@ -4,7 +4,7 @@ import example.com.PartDataItems
 import example.com.PrivacyOptions
 import example.com.UserRole
 import example.com.routes.dtos.CreateEventRequest
-import example.com.routes.dtos.CreateStreamResponse
+import example.com.routes.dtos.CreateStreamResponseDto
 import example.com.routes.dtos.EventDto
 import example.com.routes.dtos.EventResponseDto
 import example.com.routes.dtos.EventSummaryDto
@@ -20,7 +20,6 @@ import io.ktor.http.content.forEachPart
 import io.ktor.http.content.streamProvider
 import io.ktor.server.routing.Route
 import io.ktor.server.application.call
-import io.ktor.server.application.log
 import io.ktor.server.auth.authenticate
 import io.ktor.server.auth.jwt.JWTPrincipal
 import io.ktor.server.auth.principal
@@ -36,7 +35,6 @@ import net.coobird.thumbnailator.Thumbnails
 import org.bson.types.ObjectId
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
-import java.util.Base64
 
 fun Route.eventRoutes(
     eventSchema: EventSchema,
@@ -345,7 +343,7 @@ fun Route.eventRoutes(
 
             call.respond(
                 HttpStatusCode.Created,
-                CreateStreamResponse(
+                CreateStreamResponseDto(
                     streamId = streamId,
                     isLive = userSchema.findById(event.userId)?.isLive ?: false
                 )
