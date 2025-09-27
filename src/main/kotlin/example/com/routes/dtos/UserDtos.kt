@@ -33,3 +33,11 @@ data class UsernameResponse(
     val username: String
 )
 
+@Serializable
+data class LiveUserDto(
+    val id: Int,
+    val username: String,
+    val avatarPath: String
+)
+
+

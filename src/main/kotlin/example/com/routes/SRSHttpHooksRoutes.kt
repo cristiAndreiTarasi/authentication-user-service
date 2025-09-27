@@ -24,7 +24,7 @@ import java.io.File
 import java.net.URLDecoder
 import java.nio.charset.StandardCharsets
 
-// SRS HTTP hooks route + handlers
+// SRS http hooks
 fun Route.srsHttpHookRoutes(
     userSchema: UserSchema,
     tokenService: TokenService,
@@ -114,7 +114,7 @@ suspend fun handleOnPublish(
     payload: SrsHookPayload,
     tokenService: TokenService,
     streamSchema: StreamSchema,
-    userSchema: UserSchema
+    userSchema: UserSchema // kept for parity/logging if needed
 ): Boolean {
     val log = call.application.log
     try {
@@ -127,11 +127,10 @@ suspend fun handleOnPublish(
             return false
         }
 
-        // Extract core claims
         val streamKeyFromToken = tokenService.getClaimFromToken(token, "streamKey")
         val userIdStr = tokenService.getClaimFromToken(token, "userId")
         val jti = tokenService.getClaimFromToken(token, "jti") ?: ""
-        val expClaim = tokenService.getClaimFromToken(token, "exp") // may be null or numeric string
+        val expClaim = tokenService.getClaimFromToken(token, "exp")
 
         log.debug("on_publish: token claims streamKey=$streamKeyFromToken userId=$userIdStr jti=$jti exp=$expClaim")
 
@@ -140,70 +139,61 @@ suspend fun handleOnPublish(
             return false
         }
 
-        // Check token expiry (if present). exp is NumericDate (seconds since epoch)
+        // token expiry check (NumericDate seconds)
         val now = Clock.System.now()
-        val tokenExpInstant: Instant? = try {
-            expClaim?.toLongOrNull()?.let { Instant.fromEpochSeconds(it) }
-        } catch (e: Exception) {
-            null
-        }
-
+        val tokenExpInstant: Instant? = try { expClaim?.toLongOrNull()?.let { Instant.fromEpochSeconds(it) } } catch (_: Exception) { null }
         if (tokenExpInstant != null && now > tokenExpInstant) {
-            log.warn("on_publish: token expired (now=$now, exp=$tokenExpInstant) -> deny")
+            log.warn("on_publish: token expired -> deny")
             return false
         }
 
-        // Ensure SRS reported the same stream key
+        // ensure SRS stream matches token
         if (streamKeyFromToken != payload.stream) {
-            log.warn("on_publish: token.streamKey != srs.stream -> deny (token=$streamKeyFromToken srs=${payload.stream})")
+            log.warn("on_publish: token.streamKey != srs.stream -> deny")
             return false
         }
 
-        // Load DB record
-        val record = try {
-            streamSchema.findByStreamKey(streamKeyFromToken)
-        } catch (e: Exception) {
+        // load record
+        val record = try { streamSchema.findByStreamKey(streamKeyFromToken) } catch (e: Exception) {
             log.error("on_publish: DB lookup failed for $streamKeyFromToken", e)
             return false
-        } ?: run {
+        }
+
+        if (record == null) {
             log.warn("on_publish: no DB record for streamKey=$streamKeyFromToken -> deny")
             return false
         }
 
-        // Verify user ownership
         if (record.userId.toString() != userIdStr) {
             log.warn("on_publish: owner mismatch token.userId=$userIdStr != db.userId=${record.userId} -> deny")
             return false
         }
 
-        // If a jti is stored but doesn't match token jti, deny
         if (!record.publishTokenJti.isNullOrBlank() && record.publishTokenJti != jti) {
             log.warn("on_publish: stored jti='${record.publishTokenJti}' != token jti='$jti' -> deny")
             return false
         }
 
-        // If DB says 'publishing' already, accept (idempotent)
-        if (record.status.equals("publishing", ignoreCase = true)) {
+        // If DB already publishing, accept (idempotent)
+        if (record.status.equals("publishing")) {
             log.info("on_publish: already publishing -> accept")
             return true
         }
 
-        // If DB says 'ended', only allow resurrecting if jti matches and token is still valid
-        if (record.status.equals("ended", ignoreCase = true)) {
-            if (record.publishTokenJti == jti) {
-                if (tokenExpInstant != null && now > tokenExpInstant) {
-                    log.warn("on_publish: record ended but token expired -> deny")
-                    return false
-                }
-                log.info("on_publish: record ended but token jti matches and token valid -> allow republish attempt")
-                // try to mark publishing atomically below
-            } else {
+        // If ended, only allow republish when jti matches and token valid
+        if (record.status.equals("ended")) {
+            if (record.publishTokenJti != jti) {
                 log.warn("on_publish: record ended and jti mismatch -> deny")
                 return false
             }
+            if (tokenExpInstant != null && now > tokenExpInstant) {
+                log.warn("on_publish: record ended but token expired -> deny")
+                return false
+            }
+            // otherwise allow attempt to re-publish
         }
 
-        // Attempt atomic transition to publishing (works for status 'created' or 'ended')
+        // Attempt atomic transition to publishing; this function sets users.is_live true in same tx
         val marked = try {
             streamSchema.markPublishingIfNotAlready(streamKeyFromToken)
         } catch (e: Exception) {
@@ -212,30 +202,21 @@ suspend fun handleOnPublish(
         }
 
         if (marked) {
-            // best-effort set user.is_streaming true
-            try {
-                userSchema.updateIsStreaming(record.userId, true)
-            } catch (e: Exception) {
-                log.warn("on_publish: updateIsStreaming failed for user=${record.userId}", e)
-            }
             log.info("on_publish: marked publishing for $streamKeyFromToken -> accept")
             return true
         }
 
-        // Race: someone else updated. Re-read and accept if publishing.
-        val refreshed = try {
-            streamSchema.findByStreamKey(streamKeyFromToken)
-        } catch (e: Exception) {
-            log.error("on_publish: re-read failed for $streamKeyFromToken", e)
+        // Race-case: re-read and accept if publishing
+        val refreshed = try { streamSchema.findByStreamKey(streamKeyFromToken) } catch (e: Exception) {
+            log.error("on_publish: re-read failed", e)
             return false
         }
-
-        val nowPublishing = refreshed?.status.equals("publishing", ignoreCase = true)
-        log.info("on_publish: race re-check for $streamKeyFromToken -> status=${refreshed?.status}, accept=$nowPublishing")
-        return nowPublishing
+        val nowPublishing = refreshed?.status?.equals("publishing")
+        log.info("on_publish: race re-check -> status=${refreshed?.status}, accept=$nowPublishing")
+        return nowPublishing!!
     } catch (e: Exception) {
         call.application.log.error("on_publish: unexpected error", e)
-        // Fail-safe: deny publish on unexpected exception (so SRS won't accept an unauthorized stream).
+        // Deny purposefully on unexpected error
         return false
     }
 }
@@ -259,22 +240,21 @@ suspend fun handleOnUnpublish(
         }
 
         try {
-            streamSchema.markEndedIfNotAlready(streamKey)
+            // markEndedIfNotAlready will update users.is_live atomically if it updates anything
+            val marked = streamSchema.markEndedIfNotAlready(streamKey)
+            if (!marked) {
+                // Could be: stream already ended, wasn't publishing, or row was deleted earlier.
+                // If the stream was deleted earlier, ensure delete path already reconciled user's is_live.
+                log.info("on_unpublish: stream $streamKey was not publishing or already ended (marked=$marked)")
+            } else {
+                log.info("on_unpublish: stream $streamKey marked ended")
+            }
         } catch (e: Exception) {
             log.error("on_unpublish: markEnded failed for $streamKey", e)
-            // accept to avoid SRS retry storms; we've logged the error
+            // Accept to avoid SRS retry storms; we logged the error
             return true
         }
 
-        // best-effort update user.is_streaming -> false
-        try {
-            val record = streamSchema.findByStreamKey(streamKey)
-            record?.let { userSchema.updateIsStreaming(it.userId, false) }
-        } catch (e: Exception) {
-            log.warn("on_unpublish: updateIsStreaming(false) failed", e)
-        }
-
-        log.info("on_unpublish: handled for streamKey=$streamKey -> accept")
         return true
     } catch (e: Exception) {
         call.application.log.error("on_unpublish: unexpected error", e)
@@ -375,3 +355,4 @@ fun cleanupOriginHls(payload: SrsHookPayload): Boolean {
 }
 
 
+//UPDATE users u SET is_live = false WHERE u.is_live = true AND NOT EXISTS (SELECT 1 FROM streams s WHERE s.user_id = u.id AND s.status = 'publishing');

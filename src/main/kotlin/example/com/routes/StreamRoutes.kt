@@ -7,11 +7,13 @@ import example.com.routes.dtos.CreateStreamResponseDto
 import example.com.routes.dtos.DeleteStreamResponse
 import example.com.routes.dtos.StreamDto
 import example.com.routes.dtos.StreamResponseDto
+import example.com.routes.dtos.StreamSummaryDto
 import example.com.schemas.StreamSchema
 import example.com.schemas.UserSchema
 import example.com.services.gridfs.GridFSService
 import example.com.services.token.TokenClaim
 import example.com.services.token.TokenService
+import io.ktor.http.ContentType
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.content.PartData
 import io.ktor.http.content.forEachPart
@@ -22,6 +24,7 @@ import io.ktor.server.auth.jwt.JWTPrincipal
 import io.ktor.server.auth.principal
 import io.ktor.server.request.receiveMultipart
 import io.ktor.server.response.respond
+import io.ktor.server.response.respondBytes
 import io.ktor.server.routing.Route
 import io.ktor.server.routing.delete
 import io.ktor.server.routing.get
@@ -80,6 +83,28 @@ fun Route.streamRoutes(
             call.respond(HttpStatusCode.OK, streams.map { it.toStreamResponse() })
         }
 
+        // public route: returns list of stream summaries
+        get("/streams/live") {
+            val limit = call.parameters["limit"]?.toIntOrNull() ?: 10
+            val streams = streamSchema.fetchLiveStreams(limit)
+            // Map to lightweight DTO
+            val summaries = streams.map { s ->
+                val id = s.id ?: return@map null // defensive: skip if null
+                val thumbnailPath = s.thumbnailId?.let { "/streams/$id/thumbnail" }
+                StreamSummaryDto(
+                    id = id,
+                    title = s.title,
+                    userId = s.userId,
+                    username = s.username,
+                    thumbnailPath = thumbnailPath,
+                    startsAt = s.startsAt,
+                    createdAt = s.createdAt
+                )
+            }.filterNotNull()
+            call.respond(HttpStatusCode.OK, summaries)
+        }
+
+
         // Route to get streams by category
         get("/streams/category/{categoryId}") {
             val page = call.parameters["page"]?.toIntOrNull() ?: 1
@@ -110,6 +135,27 @@ fun Route.streamRoutes(
             call.respond(HttpStatusCode.OK, streams.map { it.toStreamResponse() })
         }
 
+        // Put this near avatar route; public is fine
+        get("/streams/{streamId}/thumbnail") {
+            val streamId = call.parameters["streamId"]?.toIntOrNull()
+                ?: return@get call.respond(HttpStatusCode.BadRequest, "Stream ID is missing")
+
+            val stream = streamSchema.findById(streamId)
+                ?: return@get call.respond(HttpStatusCode.NotFound, "Stream not found")
+
+            val thumbnailId = stream.thumbnailId ?: return@get call.respond(HttpStatusCode.NotFound, "Thumbnail not found")
+            val imageBytes = try {
+                gridFSService.fetchImage(ObjectId(thumbnailId))
+            } catch (e: IllegalArgumentException) {
+                return@get call.respond(HttpStatusCode.BadRequest, "Invalid thumbnail id")
+            }
+
+            if (imageBytes.isNotEmpty()) {
+                call.respondBytes(imageBytes, ContentType.Image.JPEG)
+            } else {
+                call.respond(HttpStatusCode.NotFound, "Thumbnail not found")
+            }
+        }
 
         post("/streams/start") {
             val principal = call.principal<JWTPrincipal>()
@@ -275,8 +321,6 @@ fun Route.streamRoutes(
             )
         }
 
-
-        // Route to delete a stream
         delete("/streams/delete/{streamId}") {
             val principal = call.principal<JWTPrincipal>()
             val role = principal?.payload?.getClaim("role")?.asString()
@@ -344,6 +388,17 @@ fun StreamDto.toStreamResponse(): StreamResponseDto {
         createdAt = createdAt,
         thumbnailId = thumbnailId,
         thumbnailData = thumbnailData,
-        streamKey = streamKey
+        streamKey = streamKey,
+        status = status.dbValue
     )
 }
+
+
+
+
+
+
+
+
+
+

@@ -71,6 +71,8 @@ class UserSchema(
         private const val SELECT_USER_LIKES = "SELECT liker_id FROM likes WHERE user_id = ?"
         private const val SELECT_USER_FOLLOWERS = "SELECT follower_id FROM followers WHERE followed_id = ?"
         private const val SELECT_USER_FOLLOWING = "SELECT followed_id FROM followers WHERE follower_id = ?"
+        private const val SELECT_LIVE_USERS = "SELECT * FROM users WHERE is_live = true"
+
     }
 
     suspend fun insertUser(user: ExposedUser): Int = dbQuery { connection ->
@@ -158,6 +160,12 @@ class UserSchema(
         resultSet.toUsers()
     }
 
+    suspend fun getLiveUsers(): List<ExposedUser> = dbQuery { connection ->
+        val statement = connection.prepareStatement(SELECT_LIVE_USERS)
+        val rs = statement.executeQuery()
+        rs.toUsers()
+    }
+
     suspend fun getUserById(id: Int): ExposedUser? = dbQuery { connection ->
         val statement = connection.prepareStatement(SELECT_USER_BY_ID)
         statement.setInt(1, id)
@@ -200,11 +208,11 @@ class UserSchema(
         statement.executeUpdate() > 0
     }
 
-    suspend fun updateIsStreaming(id: Int, isLive: Boolean) = dbQuery { connection ->
+    suspend fun updateIsStreaming(id: Int, isLive: Boolean): Boolean = dbQuery { connection ->
         val statement = connection.prepareStatement(UPDATE_USER_ISSTREAMING)
         statement.setBoolean(1, isLive)
         statement.setInt(2, id)
-        statement.executeUpdate()
+        statement.executeUpdate() > 0
     }
 
     suspend fun deleteUser(id: Int): Boolean = dbQuery { connection ->

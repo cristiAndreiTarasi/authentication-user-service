@@ -1,6 +1,7 @@
 package example.com.routes.dtos
 
 import example.com.PrivacyOptions
+import example.com.routes.models.StreamStatus
 import kotlinx.datetime.LocalDateTime
 import kotlinx.serialization.Serializable
 
@@ -21,7 +22,7 @@ data class StreamDto(
     val startsAt: LocalDateTime? = null,
     val createdAt: LocalDateTime,
     val endedAt: LocalDateTime? = null,
-    val status: String? = null,
+    var status: StreamStatus = StreamStatus.CREATED,
     val thumbnailId: String? = null,
     var thumbnailData: String? = null,
 )
@@ -78,4 +79,15 @@ data class StreamResponseDto(
     val status: String? = null,
     val thumbnailId: String? = null,
     var thumbnailData: String? = null
+)
+
+@Serializable
+data class StreamSummaryDto(
+    val id: Int,
+    val title: String,
+    val userId: Int,
+    val username: String,
+    val thumbnailPath: String? = null, // e.g. "/streams/123/thumbnail"
+    val startsAt: LocalDateTime? = null,
+    val createdAt: LocalDateTime
 )

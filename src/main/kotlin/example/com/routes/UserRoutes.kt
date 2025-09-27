@@ -1,5 +1,6 @@
 package example.com.routes
 
+import example.com.routes.dtos.LiveUserDto
 import example.com.routes.dtos.ProfileFieldUpdateResponse
 import example.com.routes.dtos.UpdateBioDto
 import example.com.routes.dtos.UpdateOccupationDto
@@ -57,6 +58,20 @@ fun Route.userRoutes(
             val user = userSchema.getUserById(id)
             if (user != null) call.respond(HttpStatusCode.OK, user)
             else call.respond(HttpStatusCode.NotFound, "User not found")
+        }
+
+        get("/users/live") {
+            // returns lightweight list for home screen
+            val liveUsers = userSchema.getLiveUsers()
+            // Create DTOs with path to the existing avatar route
+            val dtos = liveUsers.map { u ->
+                LiveUserDto(
+                    id = u.id!!,
+                    username = u.username,
+                    avatarPath = "/users/fetch/${u.id}/avatar"
+                )
+            }
+            call.respond(HttpStatusCode.OK, dtos)
         }
 
         get("/users/{userId}/username") {
