@@ -11,8 +11,8 @@ import example.com.routes.dtos.StreamSummaryDto
 import example.com.schemas.StreamSchema
 import example.com.schemas.UserSchema
 import example.com.services.gridfs.GridFSService
+import example.com.services.token.ITokenService
 import example.com.services.token.TokenClaim
-import example.com.services.token.TokenService
 import io.ktor.http.ContentType
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.content.PartData
@@ -44,7 +44,7 @@ import java.util.UUID
 fun Route.streamRoutes(
     streamSchema: StreamSchema,
     gridFSService: GridFSService,
-    tokenService: TokenService,
+    publishTokenService: ITokenService,
     userSchema: UserSchema,
 ) {
     authenticate("auth-jwt") {
@@ -265,34 +265,10 @@ fun Route.streamRoutes(
                 TokenClaim("jti", jti)
             )
 
-            // 1) Generate publish token (this should set exp inside the token)
-            val publishToken = tokenService.generateAccessToken(claims, streamMetaData!!.timezoneId)
-
-            // 2) Try to read the numeric exp claim from the token (seconds since epoch)
-            //    If tokenService.getClaimFromToken returns null for "exp", fallback to compute using tokenService.tokenConfig.accessExpiresIn
-            val expiresAtInstant: Instant = try {
-                val expClaimRaw = tokenService.getClaimFromToken(publishToken, "exp")
-                val expSeconds = expClaimRaw?.toLongOrNull()
-                if (expSeconds != null) {
-                    // JWT 'exp' is NumericDate (seconds since epoch)
-                    Instant.fromEpochSeconds(expSeconds)
-                } else {
-                    // Fallback: compute from now using TTL (assume tokenService.tokenConfig.accessExpiresIn is java.time.Duration)
-                    val ttlMillis = try {
-                        tokenService.tokenConfig.accessExpiresIn.toMillis()
-                    } catch (e: Exception) {
-                        // If tokenConfig isn't a java.time.Duration, as a final fallback use 5 minutes
-                        5 * 60 * 1000L
-                    }
-                    Instant.fromEpochMilliseconds(Clock.System.now().toEpochMilliseconds() + ttlMillis)
-                }
-            } catch (e: Exception) {
-                // Very defensive fallback — compute TTL of 5 minutes if anything unexpected happens
-                Instant.fromEpochMilliseconds(Clock.System.now().toEpochMilliseconds() + 5 * 60 * 1000L)
-            }
-
-            // 3) Persist publish info. Convert Instant -> LocalDateTime (UTC) to match your current StreamSchema.setPublishInfo signature
-            val expiresAtLocalUtc = expiresAtInstant.toLocalDateTime(TimeZone.UTC)
+            // generate token + expiry in one call
+            val generated = publishTokenService.generateAccessTokenWithExpiry(claims, streamMetaData!!.timezoneId)
+            val publishToken = generated.token
+            val expiresAtInstant = generated.expiresAt // kotlinx.datetime.Instant
 
             val persisted = try {
                 streamSchema.setPublishInfo(streamId, streamKey, jti, expiresAtInstant)

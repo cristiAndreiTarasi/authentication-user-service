@@ -5,7 +5,8 @@ import io.github.cdimascio.dotenv.dotenv
 object Constants {
     private val dotenv = dotenv()
 
-    val JWT_SECRET: String = dotenv["JWT_SECRET"]
+    val AUTH_JWT_SECRET: String = dotenv["AUTH_JWT_SECRET"]
+    val PUBLISH_JWT_SECRET: String = dotenv["PUBLISH_JWT_SECRET"]
 
     val MONGODB_PASSWORD: String = dotenv["MONGODB_PASSWORD"]
     val MONGODB_CLUSTER: String = dotenv["MONGODB_CLUSTER"]

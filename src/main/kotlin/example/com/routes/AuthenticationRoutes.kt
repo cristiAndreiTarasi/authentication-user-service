@@ -24,6 +24,7 @@ import example.com.services.email.EmailConfig
 import example.com.services.email.EmailService
 import example.com.services.hashing.HashingService
 import example.com.services.hashing.SaltedHash
+import example.com.services.token.ITokenService
 import example.com.services.token.TokenClaim
 import example.com.services.token.TokenService
 import io.ktor.http.HttpStatusCode
@@ -49,7 +50,7 @@ fun Route.authenticationRoutes(
     userSchema: UserSchema,
     tokenSchema: TokenSchema,
     hashingService: HashingService,
-    tokenService: TokenService
+    tokenService: ITokenService
 ) {
     post("/signup") {
         val user = try {

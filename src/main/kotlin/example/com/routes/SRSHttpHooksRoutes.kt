@@ -3,14 +3,26 @@ package example.com.routes
 import example.com.routes.dtos.SrsHookPayload
 import example.com.schemas.StreamSchema
 import example.com.schemas.UserSchema
+import example.com.services.token.ITokenService
 import example.com.services.token.TokenService
+import io.ktor.client.HttpClient
+import io.ktor.client.call.body
+import io.ktor.client.plugins.timeout
+import io.ktor.client.request.post
+import io.ktor.client.request.setBody
+import io.ktor.client.statement.bodyAsText
+import io.ktor.http.ContentType
+import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
+import io.ktor.http.contentType
 import io.ktor.server.application.ApplicationCall
 import io.ktor.server.application.application
 import io.ktor.server.application.call
 import io.ktor.server.application.log
+import io.ktor.server.plugins.origin
 import io.ktor.server.request.receive
 import io.ktor.server.response.respond
+import io.ktor.server.response.respondBytes
 import io.ktor.server.response.respondText
 import io.ktor.server.routing.Route
 import io.ktor.server.routing.post
@@ -18,45 +30,50 @@ import io.ktor.server.routing.route
 import io.ktor.utils.io.errors.IOException
 import kotlinx.datetime.Clock
 import kotlinx.datetime.Instant
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.boolean
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.io.File
 import java.net.URLDecoder
 import java.nio.charset.StandardCharsets
 
+suspend fun ApplicationCall.respondSrsBool(ok: Boolean) {
+    val body = if (ok) "0" else "1"
+    // set a proper Content-Length and avoid chunked transfer encoding
+    respondBytes(
+        body.toByteArray(Charsets.UTF_8),
+        contentType = ContentType.Text.Plain,
+        status = HttpStatusCode.OK
+    )
+}
+
 // SRS http hooks
 fun Route.srsHttpHookRoutes(
     userSchema: UserSchema,
-    tokenService: TokenService,
-    streamSchema: StreamSchema
+    publishTokenService: ITokenService,
+    streamSchema: StreamSchema,
+    httpClient: HttpClient
 ) {
     route("/api/v1/streams") {
         // single POST endpoint — origin will call this
         post {
-            val call = this.call
-            val log = call.application.log
-
-            val payload = try {
-                call.receive<SrsHookPayload>()
-            } catch (e: Exception) {
-                log.warn("srsHttpHook: malformed payload", e)
-                // Respond "1" (deny) but with 200 to avoid SRS treating this as hook failure
-                call.respondText("1", status = HttpStatusCode.OK)
-                return@post
+            val payload = try { call.receive<SrsHookPayload>() } catch (e: Exception) {
+                application.log.warn("srsHttpHook: malformed payload", e)
+                call.respondSrsBool(false); return@post
             }
 
-            log.debug("srsHttpHook: received payload=$payload")
-
-            val ok: Boolean = try {
-                processSrsHook(call, payload, tokenService, streamSchema, userSchema)
+            val ok = try {
+                processSrsHook(call, payload, publishTokenService, streamSchema, userSchema, httpClient)
             } catch (e: Exception) {
-                log.error("srsHttpHook: handler threw", e)
+                application.log.error("srsHttpHook: handler error", e)
                 false
             }
 
-            // Always 200; body "0" = OK, "1" = deny.
-            if (ok) call.respondText("0", status = HttpStatusCode.OK)
-            else call.respondText("1", status = HttpStatusCode.OK)
+            call.respondSrsBool(ok)
         }
     }
 }
@@ -65,14 +82,18 @@ fun Route.srsHttpHookRoutes(
 private suspend fun processSrsHook(
     call: ApplicationCall,
     payload: SrsHookPayload,
-    tokenService: TokenService,
+    publishTokenService: ITokenService,
     streamSchema: StreamSchema,
-    userSchema: UserSchema
+    userSchema: UserSchema,
+    httpClient: HttpClient
 ): Boolean {
-    val action = SrsHookStreams.fromActionName(payload.action)
+    val action = SrsHookAction.fromActionName(payload.action)
+
     return when (action) {
-        SrsHookStreams.ON_PUBLISH -> handleOnPublish(call, payload, tokenService, streamSchema, userSchema)
-        SrsHookStreams.ON_UNPUBLISH -> handleOnUnpublish(call, payload, tokenService, streamSchema, userSchema)
+        SrsHookAction.ON_PUBLISH -> handleOnPublish(call, payload, publishTokenService, streamSchema, userSchema, httpClient)
+        SrsHookAction.ON_UNPUBLISH -> handleOnUnpublish(call, payload, publishTokenService, streamSchema, userSchema)
+        SrsHookAction.ON_PLAY -> handleOnPlay(call, payload)
+        SrsHookAction.ON_STOP -> handleOnStop(call, payload)
         else -> {
             call.application.log.warn("srsHttpHook: unknown action=${payload.action}")
             false
@@ -108,13 +129,52 @@ fun extractToken(param: String): String? {
 }
 
 // --- Handlers ---------------------------------------------------------------
+@Serializable
+data class ModAuthReq(val stream_id: String, val token: String, val client_ip: String? = null, val app: String = "live")
+@Serializable
+data class ModAuthResp(val allow: Boolean, val reason: String? = null)
 
-suspend fun handleOnPublish(
+suspend fun callModerationController(
+    streamKey: String,
+    token: String,
+    clientIp: String?,
+    app: String = "live",
+    httpClient: HttpClient
+): Boolean {
+    val req = ModAuthReq(streamKey, token, clientIp, app)
+
+    return try {
+        val resp = httpClient.post("http://moderation-controller:8090/internal/authorize_publish") {
+            contentType(ContentType.Application.Json)
+            setBody(req)
+            timeout { requestTimeoutMillis = 900 } // consider bumping this
+        }
+
+        val respText = resp.bodyAsText() // raw textual body
+        println("moderation response raw: $respText") // or log via logger passed in
+
+        if (resp.status == HttpStatusCode.OK) {
+            // parse explicitly to ensure we see what allow value is
+            val parsed = kotlinx.serialization.json.Json.decodeFromString(ModAuthResp.serializer(), respText)
+            println("moderation parsed: $parsed")
+            parsed.allow
+        } else {
+            println("moderation returned non-200: ${resp.status}")
+            false
+        }
+    } catch (e: Exception) {
+        println("moderation call failed: $e",)
+        false
+    }
+}
+
+private suspend fun handleOnPublish(
     call: ApplicationCall,
     payload: SrsHookPayload,
-    tokenService: TokenService,
+    publishTokenService: ITokenService,
     streamSchema: StreamSchema,
-    userSchema: UserSchema // kept for parity/logging if needed
+    userSchema: UserSchema,
+    httpClient: HttpClient
 ): Boolean {
     val log = call.application.log
     try {
@@ -127,10 +187,10 @@ suspend fun handleOnPublish(
             return false
         }
 
-        val streamKeyFromToken = tokenService.getClaimFromToken(token, "streamKey")
-        val userIdStr = tokenService.getClaimFromToken(token, "userId")
-        val jti = tokenService.getClaimFromToken(token, "jti") ?: ""
-        val expClaim = tokenService.getClaimFromToken(token, "exp")
+        val streamKeyFromToken = publishTokenService.getClaimFromToken(token, "streamKey")
+        val userIdStr = publishTokenService.getClaimFromToken(token, "userId")
+        val jti = publishTokenService.getClaimFromToken(token, "jti") ?: ""
+        val expClaim = publishTokenService.getClaimFromToken(token, "exp")
 
         log.debug("on_publish: token claims streamKey=$streamKeyFromToken userId=$userIdStr jti=$jti exp=$expClaim")
 
@@ -186,6 +246,7 @@ suspend fun handleOnPublish(
                 log.warn("on_publish: record ended and jti mismatch -> deny")
                 return false
             }
+
             if (tokenExpInstant != null && now > tokenExpInstant) {
                 log.warn("on_publish: record ended but token expired -> deny")
                 return false
@@ -193,10 +254,27 @@ suspend fun handleOnPublish(
             // otherwise allow attempt to re-publish
         }
 
-        // Attempt atomic transition to publishing; this function sets users.is_live true in same tx
+        val modOk = try {
+            callModerationController(
+                streamKey = streamKeyFromToken,
+                token = token,
+                clientIp = call.request.origin.remoteHost,
+                httpClient = httpClient
+            )
+        } catch (e: Exception) {
+            log.error("on_publish: moderation call threw", e)
+            false
+        }
+
+        if (!modOk) {
+            log.warn("on_publish: moderation-controller denied or timed out -> deny to SRS")
+            return false
+        }
+
+        // moderation allowed, now perform DB atomic transition to publishing
         val marked = try {
             streamSchema.markPublishingIfNotAlready(streamKeyFromToken)
-        } catch (e: Exception) {
+        } catch(e:Exception) {
             log.error("on_publish: failed to mark publishing for $streamKeyFromToken", e)
             return false
         }
@@ -221,10 +299,10 @@ suspend fun handleOnPublish(
     }
 }
 
-suspend fun handleOnUnpublish(
+private suspend fun handleOnUnpublish(
     call: ApplicationCall,
     payload: SrsHookPayload,
-    tokenService: TokenService,
+    publishTokenService: ITokenService,
     streamSchema: StreamSchema,
     userSchema: UserSchema
 ): Boolean {
@@ -232,7 +310,7 @@ suspend fun handleOnUnpublish(
     try {
         log.info("on_unpublish: payload=$payload")
         val token = extractToken(payload.param ?: "")
-        val streamKey = token?.let { tokenService.getClaimFromToken(it, "streamKey") } ?: payload.stream
+        val streamKey = token?.let { publishTokenService.getClaimFromToken(it, "streamKey") } ?: payload.stream
 
         if (streamKey.isNullOrBlank()) {
             log.warn("on_unpublish: no streamKey resolved; accept to avoid SRS retries.")
@@ -263,22 +341,24 @@ suspend fun handleOnUnpublish(
     }
 }
 
-enum class SrsHookStreams(val actionName: String) {
-    ON_PUBLISH("on_publish"),
-    ON_UNPUBLISH("on_unpublish");
-
-    companion object {
-        fun fromActionName(name: String): SrsHookStreams? =
-            entries.find { it.actionName == name }
-    }
+private suspend fun handleOnPlay(call: ApplicationCall, payload: SrsHookPayload): Boolean {
+    call.application.log.info("on_play: allowing playback for stream=${payload.stream}, client=${payload.clientId}")
+    return true // Always allow playback
 }
 
-enum class SrsHookSessions(val actionName: String) {
+private suspend fun handleOnStop(call: ApplicationCall, payload: SrsHookPayload): Boolean {
+    call.application.log.info("on_stop: client stopped playback for stream=${payload.stream}, client=${payload.clientId}")
+    return true // Always accept
+}
+
+enum class SrsHookAction(val actionName: String) {
+    ON_PUBLISH("on_publish"),
+    ON_UNPUBLISH("on_unpublish"),
     ON_PLAY("on_play"),
     ON_STOP("on_stop");
 
     companion object {
-        fun fromActionName(name: String): SrsHookSessions? =
+        fun fromActionName(name: String): SrsHookAction? =
             entries.find { it.actionName == name }
     }
 }

@@ -37,3 +37,9 @@ val WS_JSON = Json {
     ignoreUnknownKeys = true
     classDiscriminator = "type"
 }
+
+val appJson = Json {
+    prettyPrint = true
+    isLenient = true
+    ignoreUnknownKeys = true
+}

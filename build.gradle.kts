@@ -56,4 +56,13 @@ dependencies {
     implementation(libs.ktor.server.websockets)
 
     implementation("io.lettuce:lettuce-core:6.5.0.RELEASE")
+
+    implementation("io.ktor:ktor-client-cio:2.3.3")
+
+    implementation("io.ktor:ktor-client-core:2.3.12")
+    implementation("io.ktor:ktor-client-cio:2.3.12")
+    implementation("io.ktor:ktor-client-content-negotiation:2.3.12")
+    implementation("io.ktor:ktor-serialization-kotlinx-json:2.3.12")
+    implementation("io.ktor:ktor-client-logging:2.3.12")
+
 }

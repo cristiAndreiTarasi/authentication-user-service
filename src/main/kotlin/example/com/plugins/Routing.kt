@@ -16,9 +16,12 @@ import example.com.schemas.UserSchema
 import example.com.services.gridfs.GridFSService
 import example.com.services.hashing.HashingService
 import example.com.services.role.RoleService
+import example.com.services.token.ITokenService
 import example.com.services.token.TokenService
+import io.ktor.client.HttpClient
 import io.ktor.server.application.Application
 import io.ktor.server.routing.routing
+import okhttp3.OkHttpClient
 import java.sql.Connection
 
 fun Application.configureRouting(
@@ -29,17 +32,19 @@ fun Application.configureRouting(
     tagSchema: TagSchema,
     categorySchema: CategorySchema,
     hashingService: HashingService,
-    tokenService: TokenService,
     postgresConnection: Connection,
-    gridFSService: GridFSService
+    gridFSService: GridFSService,
+    httpClient: HttpClient,
+    authTokenService: ITokenService,
+    publishTokenService: ITokenService
 ) {
     routing {
-        authenticationRoutes(userSchema, tokenSchema, hashingService, tokenService)
+        authenticationRoutes(userSchema, tokenSchema, hashingService, authTokenService)
         userRoutes(userSchema, tokenSchema, postgresConnection, gridFSService)
-        streamRoutes(streamSchema, gridFSService, tokenService, userSchema)
+        streamRoutes(streamSchema, gridFSService, publishTokenService, userSchema)
         eventRoutes(eventSchema, gridFSService, userSchema, streamSchema)
         tagRoutes(tagSchema)
         categoryRoutes(categorySchema)
-        srsHttpHookRoutes(userSchema, tokenService, streamSchema)
+        srsHttpHookRoutes(userSchema, publishTokenService, streamSchema, httpClient)
     }
 }
