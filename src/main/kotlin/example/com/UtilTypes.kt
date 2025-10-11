@@ -43,3 +43,34 @@ val appJson = Json {
     isLenient = true
     ignoreUnknownKeys = true
 }
+
+enum class StreamStatus(val dbValue: String) {
+    CREATED("created"),      // Stream created, not yet publishing
+    PUBLISHING("publishing"), // Stream is live and broadcasting
+    ENDED("ended"),          // Streamer voluntarily ended the stream
+    TERMINATED("terminated"); // Platform forcibly ended the stream
+
+    companion object {
+        fun fromDb(value: String?): StreamStatus {
+            return when (value) {
+                "publishing" -> PUBLISHING
+                "ended" -> ENDED
+                "terminated" -> TERMINATED
+                else -> CREATED
+            }
+        }
+    }
+}
+
+enum class ModerationSeverity {
+    WARNING,      // Initial content violation
+    BLOCKED,      // Stream temporarily blocked with placeholder
+    TERMINATED    // Stream permanently terminated
+}
+
+enum class ModerationReason {
+    SEXUAL_CONTENT,
+    VIOLENT_CONTENT,
+    MANUAL,        // Manual moderation action
+    OTHER          // Generic content violation
+}

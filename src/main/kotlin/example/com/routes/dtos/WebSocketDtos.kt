@@ -16,7 +16,7 @@ sealed class LiveEvent {
     @SerialName("JoinRoom")
     data class JoinRoom(
         override val roomId: String,
-        override val initiatorId: String? = null,
+        override val initiatorId: String = "system",
         override val timestamp: Long? = null,
         val username: String
     ) : LiveEvent()
@@ -25,7 +25,7 @@ sealed class LiveEvent {
     @SerialName("LeaveRoom")
     data class LeaveRoom(
         override val roomId: String,
-        override val initiatorId: String? = null,
+        override val initiatorId: String = "system",
         override val timestamp: Long? = null,
         val username: String
     ) : LiveEvent()
@@ -44,7 +44,7 @@ sealed class LiveEvent {
     @SerialName("SystemMessage")
     data class SystemMessage(
         override val roomId: String,
-        override val initiatorId: String? = null,
+        override val initiatorId: String = "system",
         override val timestamp: Long? = null,
         val text: String
     ) : LiveEvent()
@@ -142,81 +142,97 @@ sealed class LiveEvent {
         override val initiatorId: String? = null,
         override val timestamp: Long? = null
     ) : LiveEvent()
+
+    @Serializable
+    @SerialName("StreamTerminatedEvent")
+    data class StreamTerminatedEvent(
+        override val roomId: String,
+        val reason: String,
+        val message: String,
+        override val timestamp: Long = System.currentTimeMillis(),
+        override val initiatorId: String = "system"
+    ) : LiveEvent()
+
+    @Serializable
+    @SerialName("ModerationWarningEvent")
+    data class ModerationWarningEvent(
+        override val roomId: String,
+        val severity: String, // "warning" | "blocked" | "terminated"
+        val reason: String, // "sexual_content" | "violent_content"
+        val message: String,
+        override val timestamp: Long = System.currentTimeMillis(),
+        override val initiatorId: String = "system"
+    ) : LiveEvent()
 }
 
 // guarantees initiatorId + timestamp even if a callsite forgets them
 fun LiveEvent.withDefaults(): LiveEvent {
     val now = System.currentTimeMillis()
     return when (this) {
-        is LiveEvent.JoinRoom ->
-            this.copy(
+        is LiveEvent.JoinRoom -> this.copy(
                 initiatorId = this.initiatorId ?: "system",
                 timestamp = this.timestamp ?: now
             )
-        is LiveEvent.LeaveRoom ->
-            this.copy(
+        is LiveEvent.LeaveRoom -> this.copy(
                 initiatorId = this.initiatorId ?: "system",
                 timestamp = this.timestamp ?: now
             )
-        is LiveEvent.ChatMessage ->
-            this.copy(
+        is LiveEvent.ChatMessage -> this.copy(
                 initiatorId = this.initiatorId ?: "system",
                 timestamp = this.timestamp ?: now
             )
-        is LiveEvent.SystemMessage ->
-            this.copy(
+        is LiveEvent.SystemMessage -> this.copy(
                 initiatorId = this.initiatorId ?: "system",
                 timestamp = this.timestamp ?: now
             )
-        is LiveEvent.Like ->
-            this.copy(
+        is LiveEvent.Like -> this.copy(
                 initiatorId = this.initiatorId ?: "system",
                 timestamp = this.timestamp ?: now
             )
-        is LiveEvent.Gift ->
-            this.copy(
+        is LiveEvent.Gift -> this.copy(
                 initiatorId = this.initiatorId ?: "system",
                 timestamp = this.timestamp ?: now
             )
-        is LiveEvent.KickUser ->
-            this.copy(
+        is LiveEvent.KickUser -> this.copy(
                 initiatorId = this.initiatorId ?: "system",
                 timestamp = this.timestamp ?: now
             )
-        is LiveEvent.MuteUser ->
-            this.copy(
+        is LiveEvent.MuteUser -> this.copy(
                 initiatorId = this.initiatorId ?: "system",
                 timestamp = this.timestamp ?: now
             )
-        is LiveEvent.UnmuteUser ->
-            this.copy(
+        is LiveEvent.UnmuteUser -> this.copy(
                 initiatorId = this.initiatorId ?: "system",
                 timestamp = this.timestamp ?: now
             )
-        is LiveEvent.GrantModerator ->
-            this.copy(
+        is LiveEvent.GrantModerator -> this.copy(
                 initiatorId = this.initiatorId ?: "system",
                 timestamp = this.timestamp ?: now
             )
-        is LiveEvent.RevokeModerator ->
-            this.copy(
+        is LiveEvent.RevokeModerator -> this.copy(
                 initiatorId = this.initiatorId ?: "system",
                 timestamp = this.timestamp ?: now
             )
-        is LiveEvent.StreamStats ->
-            this.copy(
+        is LiveEvent.StreamStats -> this.copy(
                 initiatorId = this.initiatorId ?: "system",
                 timestamp = this.timestamp ?: now
             )
-        is LiveEvent.PublisherInfoEvent ->
-            this.copy(
+        is LiveEvent.PublisherInfoEvent -> this.copy(
                 initiatorId = this.initiatorId ?: "system",
                 timestamp = this.timestamp ?: now
             )
-        is LiveEvent.StreamEndedEvent ->
-            this.copy(
+        is LiveEvent.StreamEndedEvent -> this.copy(
                 initiatorId = this.initiatorId ?: "system",
                 timestamp = this.timestamp ?: now
             )
+
+        is LiveEvent.ModerationWarningEvent -> this.copy(
+                initiatorId = this.initiatorId ?: "system",
+                timestamp = this.timestamp ?: now
+            )
+        is LiveEvent.StreamTerminatedEvent -> this.copy(
+            initiatorId = this.initiatorId ?: "system",
+            timestamp = this.timestamp ?: now
+        )
     }
 }

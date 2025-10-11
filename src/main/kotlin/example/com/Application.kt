@@ -117,7 +117,8 @@ fun Application.module() {
         userSchema, tokenSchema, streamSchema,
         eventSchema, tagSchema, categorySchema,
         hashingService, postgresConnection, gridFsService,
-        httpClient, authTokenService, publishTokenService
+        httpClient, authTokenService, publishTokenService,
+        redisManager
     )
 
     val cleanupJob = launch {

@@ -1,7 +1,7 @@
 package example.com.routes.dtos
 
 import example.com.PrivacyOptions
-import example.com.routes.models.StreamStatus
+import example.com.StreamStatus
 import kotlinx.datetime.LocalDateTime
 import kotlinx.serialization.Serializable
 

@@ -330,6 +330,29 @@ fun Application.configureSockets(
             is LiveEvent.StreamEndedEvent -> {
                 // Handle if needed
             }
+
+            is LiveEvent.ModerationWarningEvent -> {
+                // System-generated moderation warnings - just broadcast to room
+                redisManager.addToStream(event)
+            }
+
+            is LiveEvent.StreamTerminatedEvent -> {
+                // Stream termination - broadcast and close connections
+                redisManager.addToStream(event)
+
+                // Close all WebSocket connections for this room with policy violation reason
+                SessionManager.getRoomSessions(roomId).forEach { session ->
+                    try {
+                        session.close(CloseReason(CloseReason.Codes.VIOLATED_POLICY, event.message))
+                    } catch (e: Exception) {
+                    }
+                    SessionManager.removeSession(session)
+                }
+
+                // Clean up room state
+                PermissionManager.removeRoom(roomId)
+                redisManager.deleteCounters(roomId)
+            }
         }
     }
 

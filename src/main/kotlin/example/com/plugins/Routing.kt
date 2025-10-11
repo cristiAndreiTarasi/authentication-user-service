@@ -3,6 +3,7 @@ package example.com.plugins
 import example.com.routes.authenticationRoutes
 import example.com.routes.categoryRoutes
 import example.com.routes.eventRoutes
+import example.com.routes.moderationRoutes
 import example.com.routes.srsHttpHookRoutes
 import example.com.routes.streamRoutes
 import example.com.routes.tagRoutes
@@ -15,6 +16,7 @@ import example.com.schemas.TokenSchema
 import example.com.schemas.UserSchema
 import example.com.services.gridfs.GridFSService
 import example.com.services.hashing.HashingService
+import example.com.services.redis.RedisManager
 import example.com.services.role.RoleService
 import example.com.services.token.ITokenService
 import example.com.services.token.TokenService
@@ -36,7 +38,8 @@ fun Application.configureRouting(
     gridFSService: GridFSService,
     httpClient: HttpClient,
     authTokenService: ITokenService,
-    publishTokenService: ITokenService
+    publishTokenService: ITokenService,
+    redisManager: RedisManager
 ) {
     routing {
         authenticationRoutes(userSchema, tokenSchema, hashingService, authTokenService)
@@ -46,5 +49,6 @@ fun Application.configureRouting(
         tagRoutes(tagSchema)
         categoryRoutes(categorySchema)
         srsHttpHookRoutes(userSchema, publishTokenService, streamSchema, httpClient)
+        moderationRoutes(redisManager, streamSchema)
     }
 }
