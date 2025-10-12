@@ -1,3 +1,4 @@
+// UserRoutes.kt
 package example.com.routes
 
 import example.com.routes.dtos.LiveUserDto
@@ -16,6 +17,7 @@ import io.ktor.http.content.PartData
 import io.ktor.http.content.forEachPart
 import io.ktor.http.content.streamProvider
 import io.ktor.server.application.call
+import io.ktor.server.application.log
 import io.ktor.server.auth.authenticate
 import io.ktor.server.request.receive
 import io.ktor.server.request.receiveMultipart
@@ -32,11 +34,12 @@ import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.sql.Connection
 import java.sql.SQLException
+import javax.sql.DataSource
 
 fun Route.userRoutes(
     userSchema: UserSchema,
     tokenSchema: TokenSchema,
-    postgresConnection: Connection,
+    dataSource: DataSource,
     gridFSService: GridFSService
 ) {
     authenticate("auth-jwt") {
@@ -61,9 +64,7 @@ fun Route.userRoutes(
         }
 
         get("/users/live") {
-            // returns lightweight list for home screen
             val liveUsers = userSchema.getLiveUsers()
-            // Create DTOs with path to the existing avatar route
             val dtos = liveUsers.map { u ->
                 LiveUserDto(
                     id = u.id!!,
@@ -80,7 +81,6 @@ fun Route.userRoutes(
 
             val user = userSchema.getUserById(userId)
             if (user != null) {
-                // Respond with the DTO object
                 call.respond(HttpStatusCode.OK, UsernameResponse(username = user.username))
             } else {
                 call.respond(HttpStatusCode.NotFound, "User not found")
@@ -91,7 +91,6 @@ fun Route.userRoutes(
             val userId = call.parameters["userId"]?.toIntOrNull()
                 ?: return@get call.respond(HttpStatusCode.BadRequest, "User ID is missing")
 
-            // Fetch the image ID associated with the user ID from the database
             val imageIdString = gridFSService.getAvatarIdByUserId(userId)
                 ?: return@get call.respond(HttpStatusCode.NotFound, "Image not found for user")
 
@@ -146,42 +145,89 @@ fun Route.userRoutes(
                 return@delete
             }
 
-            val imageIdString = gridFSService.getAvatarIdByUserId(userId)
-            val imageId = imageIdString?.let { ObjectId(it) }
+            var avatarIdFromDb: String? = null
 
-            try {
-                postgresConnection.autoCommit = false
+            // Borrow a single connection from the pool for the whole transaction
+            dataSource.connection.use { conn ->
+                val origAuto = conn.autoCommit
+                try {
+                    conn.autoCommit = false
 
-                val tokenDeleteResult = tokenSchema.deleteTokensForUser(userId)
-                if (!tokenDeleteResult) {
-                    postgresConnection.rollback()
-                    call.respond(
-                        HttpStatusCode.InternalServerError,
-                        "Failed to delete user tokens"
-                    )
+                    // --- 1) Delete tokens in same transaction ---
+                    // Prefer calling a transactional, non-suspending overload provided by TokenSchema:
+                    // tokenSchema.deleteTokensForUserTransactional(conn, userId)
+                    // If TokenSchema doesn't provide that, run the DELETE here using the connection:
+                    val tokenDeleteOk: Boolean = try {
+                        val deleteTokensSql = "DELETE FROM tokens WHERE user_id = ?"
+                        conn.prepareStatement(deleteTokensSql).use { stmt ->
+                            stmt.setInt(1, userId)
+                            // executeUpdate returns rows affected
+                            stmt.executeUpdate() >= 0 // true even if 0 rows
+                        }
+                    } catch (e: Exception) {
+                        // if anything went wrong, rollback and rethrow
+                        try { conn.rollback() } catch (_: Exception) {}
+                        throw e
+                    }
+
+                    // If you have a transactional TokenSchema method, you should use it instead so schema logic is centralized.
+
+                    // --- 2) Delete user in same transaction and capture image id ---
+                    // Prefer using the transactional overload on UserSchema if available:
+                    // val avatarId = userSchema.deleteUserTransactional(conn, userId)
+                    // We'll use userSchema.deleteUserTransactional(conn, userId) if present; otherwise run inline:
+                    avatarIdFromDb = try {
+                        // inline: get image_id then delete
+                        var imageId: String? = null
+                        conn.prepareStatement("SELECT image_id FROM users WHERE id = ?").use { sel ->
+                            sel.setInt(1, userId)
+                            sel.executeQuery().use { rs ->
+                                if (rs.next()) imageId = rs.getString("image_id")
+                            }
+                        }
+
+                        val deleted = conn.prepareStatement("DELETE FROM users WHERE id = ?").use { del ->
+                            del.setInt(1, userId)
+                            del.executeUpdate() > 0
+                        }
+
+                        if (!deleted) {
+                            // nothing deleted -> rollback + return failure
+                            conn.rollback()
+                            call.respond(HttpStatusCode.InternalServerError, "Failed to delete user")
+                            return@delete
+                        }
+
+                        imageId
+                    } catch (e: Exception) {
+                        try { conn.rollback() } catch (_: Exception) {}
+                        throw e
+                    }
+
+                    // commit transaction
+                    conn.commit()
+                } catch (e: Exception) {
+                    try { conn.rollback() } catch (_: Exception) {}
+                    call.application.log.error("Failed to delete user and tokens", e)
+                    call.respond(HttpStatusCode.InternalServerError, "Failed to delete user and tokens: ${e.message}")
                     return@delete
+                } finally {
+                    try { conn.autoCommit = origAuto } catch (_: Exception) {}
                 }
+            } // connection closed / returned to pool here
 
-                val deleteResult = userSchema.deleteUser(userId)
-                if (!deleteResult) {
-                    postgresConnection.rollback()
-                    call.respond(HttpStatusCode.InternalServerError, "Failed to delete user")
-                    return@delete
+            // Remove GridFS image (outside DB transaction)
+            avatarIdFromDb?.let { idStr ->
+                try {
+                    gridFSService.deleteImage(ObjectId(idStr))
+                } catch (e: Exception) {
+                    // non-fatal
+                    call.application.environment.log.error("Failed to delete avatar from GridFS", e)
                 }
-
-                imageId?.let { gridFSService.deleteImage(it) }
-
-                postgresConnection.commit()
-                call.respond(HttpStatusCode.OK, "User deleted successfully")
-            } catch (e: SQLException) {
-                postgresConnection.rollback()
-                call.respond(
-                    HttpStatusCode.InternalServerError,
-                    "Failed to delete user and tokens: ${e.message}"
-                )
-            } finally {
-                postgresConnection.autoCommit = true
             }
+
+            // success
+            call.respond(HttpStatusCode.OK, "User deleted successfully")
         }
 
         put("/users/update/{userId}/bio") {
@@ -259,7 +305,6 @@ fun Route.userRoutes(
                         is PartData.FileItem -> {
                             fileContent = part.streamProvider().readBytes()
                         }
-
                         else -> {
                             part.dispose()
                         }
@@ -285,7 +330,6 @@ fun Route.userRoutes(
                             .outputQuality(0.8)
                             .toOutputStream(outputStream)
 
-                        // Return the transformed image as a ByteArray.
                         outputStream.toByteArray()
                     })
                     val updateSuccess = userSchema.updateUserImageId(userId, imageId.toHexString())

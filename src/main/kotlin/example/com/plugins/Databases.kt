@@ -2,6 +2,8 @@ package example.com.plugins
 
 import com.mongodb.client.MongoClients
 import com.mongodb.client.MongoDatabase
+import com.zaxxer.hikari.HikariConfig
+import com.zaxxer.hikari.HikariDataSource
 import example.com.config.Constants
 import io.ktor.server.application.*
 import io.ktor.server.config.*
@@ -9,27 +11,47 @@ import org.slf4j.LoggerFactory
 import java.sql.Connection
 import java.sql.DriverManager
 import java.sql.SQLException
+import javax.sql.DataSource
 
-fun Application.connectToPostgres(embedded: Boolean): Connection {
+fun Application.createPostgresDataSource(embedded: Boolean = false): DataSource {
     Class.forName("org.postgresql.Driver")
 
-    println("Embedded flag value: $embedded")
-
-    return if (embedded) {
-        println("Connecting to embedded H2 database.*********************************************************************")
-        return DriverManager.getConnection("jdbc:h2:mem:test;DB_CLOSE_DELAY=-1", "root", "")
-    } else {
-        val url = environment.config.property("db.postgres.url").getString()
-        val user = environment.config.property("db.postgres.user").getString()
-        val password = environment.config.property("db.postgres.password").getString()
-
-        try {
-            println("Connecting to PostgreSQL database at $url ***********************************************************")
-            DriverManager.getConnection(url, user, password)
-        } catch (e: SQLException) {
-            println("Error connecting to PostgreSQL database: ${e.message} ***********************************************")
-            throw e
+    if (embedded) {
+        // for tests or local in-memory
+        val cfg = HikariConfig().apply {
+            jdbcUrl = "jdbc:h2:mem:test;DB_CLOSE_DELAY=-1"
+            username = "root"
+            password = ""
+            maximumPoolSize = 3
+            isAutoCommit = false
+            connectionTestQuery = "SELECT 1"
         }
+        return HikariDataSource(cfg)
+    }
+
+    val url = environment.config.property("db.postgres.url").getString()
+    val user = environment.config.property("db.postgres.user").getString()
+    val password = environment.config.property("db.postgres.password").getString()
+
+    val cfg = HikariConfig().apply {
+        jdbcUrl = url
+        username = user
+        this.password = password
+        maximumPoolSize = (System.getenv("HIKARI_MAX_POOL") ?: "10").toInt()
+        minimumIdle = (System.getenv("HIKARI_MIN_IDLE") ?: "2").toInt()
+        idleTimeout = 600_000L
+        maxLifetime = 1_800_000L
+        connectionTimeout = 30_000L
+        isAutoCommit = true
+        connectionTestQuery = "SELECT 1"
+        // optional: add schema, connectionInitSql, etc.
+    }
+
+    try {
+        return HikariDataSource(cfg)
+    } catch (e: Exception) {
+        println("Error creating Hikari DataSource: ${e.message}")
+        throw e
     }
 }
 

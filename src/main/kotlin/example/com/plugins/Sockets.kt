@@ -340,13 +340,24 @@ fun Application.configureSockets(
                 // Stream termination - broadcast and close connections
                 redisManager.addToStream(event)
 
-                // Close all WebSocket connections for this room with policy violation reason
+                // ensure immediate delivery to active sessions BEFORE closing them
+                val json = LiveEventJson.encodeToString(liveEventPolymorphic, event.withDefaults())
+                SessionManager.getRoomSessions(roomId).forEach { session ->
+                    try {
+                        session.send(Frame.Text(json)) // deliver termination
+                    } catch (e: Exception) {
+                        // ignore send failure
+                    }
+                }
+
+                // now close all sessions with a policy reason
                 SessionManager.getRoomSessions(roomId).forEach { session ->
                     try {
                         session.close(CloseReason(CloseReason.Codes.VIOLATED_POLICY, event.message))
                     } catch (e: Exception) {
+                    } finally {
+                        SessionManager.removeSession(session)
                     }
-                    SessionManager.removeSession(session)
                 }
 
                 // Clean up room state

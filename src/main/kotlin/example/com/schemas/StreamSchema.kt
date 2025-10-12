@@ -23,158 +23,159 @@ import java.sql.Statement
 import java.sql.Timestamp
 import java.sql.Types
 import java.util.Base64
+import javax.sql.DataSource
 
 class StreamSchema(
-    private val dbConnection: Connection,
+    private val dataSource: DataSource,
     private val categorySchema: CategorySchema,
     private val tagSchema: TagSchema,
     private val gridFSService: GridFSService
 ) {
     suspend fun create(stream: StreamDto): Int = dbQuery { connection ->
-        val statement = connection.prepareStatement(StreamQueries.INSERT_STREAM, Statement.RETURN_GENERATED_KEYS)
+        connection.prepareStatement(StreamQueries.INSERT_STREAM, Statement.RETURN_GENERATED_KEYS).use { statement ->
+            statement.setString(1, stream.title)
+            statement.setString(2, stream.description)
+            statement.setInt(3, stream.userId)
+            statement.setString(4, stream.privacyType.displayName)
+            statement.setFloat(5, stream.ticketPrice)
+            statement.setString(6, stream.thumbnailId)
 
-        statement.setString(1, stream.title)
-        statement.setString(2, stream.description)
-        statement.setInt(3, stream.userId)
-        statement.setString(4, stream.privacyType.displayName)
-        statement.setFloat(5, stream.ticketPrice)
-        statement.setString(6, stream.thumbnailId)
+            if (stream.startsAt != null) {
+                val startsEpochMillis = stream.startsAt!!.toInstant(TimeZone.UTC).toEpochMilliseconds()
+                statement.setTimestamp(7, Timestamp.from(java.time.Instant.ofEpochMilli(startsEpochMillis)))
+            } else {
+                statement.setNull(7, Types.TIMESTAMP)
+            }
 
-        if (stream.startsAt != null) {
-            val startsEpochMillis = stream.startsAt!!.toInstant(TimeZone.UTC).toEpochMilliseconds()
-            statement.setTimestamp(7, Timestamp.from(java.time.Instant.ofEpochMilli(startsEpochMillis)))
-        } else {
-            statement.setNull(7, Types.TIMESTAMP)
-        }
+            val createdEpochMillis = stream.createdAt.toInstant(TimeZone.UTC).toEpochMilliseconds()
+            statement.setTimestamp(8, Timestamp.from(java.time.Instant.ofEpochMilli(createdEpochMillis)))
 
-        val createdEpochMillis = stream.createdAt.toInstant(TimeZone.UTC).toEpochMilliseconds()
-        statement.setTimestamp(8, Timestamp.from(java.time.Instant.ofEpochMilli(createdEpochMillis)))
+            statement.executeUpdate()
+            statement.generatedKeys.use { generatedKeys ->
+                if (generatedKeys.next()) {
+                    val streamId = generatedKeys.getInt(1)
 
-        statement.executeUpdate()
+                    // Important: use transactional (connection-aware) category/tag insertion so they run in same conn
+                    categorySchema.insertCategoriesForStream(streamId, stream.categories, connection)
+                    // Use the connection-aware tag insert (non-suspending) to stay in same transaction
+                    tagSchema.insertTagsForStream(streamId, stream.tags, connection)
 
-        val generatedKeys = statement.generatedKeys
-        if (generatedKeys.next()) {
-            val streamId = generatedKeys.getInt(1)
-
-            categorySchema.insertCategoriesForStream(streamId, stream.categories, connection)
-            tagSchema.insertTagsForStream(streamId, stream.tags)
-
-            return@dbQuery streamId
-        } else {
-            throw Exception("Unable to retrieve the id of the newly inserted stream")
+                    return@dbQuery streamId
+                } else {
+                    throw Exception("Unable to retrieve the id of the newly inserted stream")
+                }
+            }
         }
     }
 
     suspend fun findById(streamId: Int): StreamDto? = dbQuery { connection ->
-        val statement = connection.prepareStatement(StreamQueries.SELECT_STREAM_BY_ID)
-        statement.setInt(1, streamId)
-
-        val resultSet = statement.executeQuery()
-
-        if (resultSet.next()) {
-            val stream = resultSet.toStreamDataModel()
-            stream.categories = categorySchema.getCategoriesByStreamId(stream.id!!)
-            stream.tags = tagSchema.getTagsByStreamId(stream.id)
-            return@dbQuery stream
-        } else {
-            return@dbQuery null
+        connection.prepareStatement(StreamQueries.SELECT_STREAM_BY_ID).use { statement ->
+            statement.setInt(1, streamId)
+            statement.executeQuery().use { resultSet ->
+                if (resultSet.next()) {
+                    val stream = resultSet.toStreamDataModel()
+                    // use the connection-aware category/tag fetchers (non-suspending)
+                    stream.categories = categorySchema.getCategoriesByStreamId(stream.id!!, connection)
+                    stream.tags = tagSchema.getTagsByStreamId(stream.id!!)
+                    return@dbQuery stream
+                } else {
+                    return@dbQuery null
+                }
+            }
         }
     }
 
     suspend fun findByUserId(userId: Int): List<StreamDto> = dbQuery { connection ->
-        val statement = connection.prepareStatement(StreamQueries.SELECT_STREAMS_BY_USER_ID)
-        statement.setInt(1, userId)
-
-        val resultSet = statement.executeQuery()
-        val streams = mutableListOf<StreamDto>()
-
-        while (resultSet.next()) {
-            val stream = resultSet.toStreamDataModel()
-            stream.categories = categorySchema.getCategoriesByStreamId(stream.id!!)
-            stream.tags = tagSchema.getTagsByStreamId(stream.id)
-            streams.add(stream)
+        connection.prepareStatement(StreamQueries.SELECT_STREAMS_BY_USER_ID).use { statement ->
+            statement.setInt(1, userId)
+            statement.executeQuery().use { resultSet ->
+                val streams = mutableListOf<StreamDto>()
+                while (resultSet.next()) {
+                    val stream = resultSet.toStreamDataModel()
+                    stream.categories = categorySchema.getCategoriesByStreamId(stream.id!!, connection)
+                    stream.tags = tagSchema.getTagsByStreamId(stream.id!!)
+                    streams.add(stream)
+                }
+                streams
+            }
         }
-
-        return@dbQuery streams
     }
 
     suspend fun fetchStreamsCursor(cursor: LocalDateTime?, limit: Int): List<StreamDto> = dbQuery { connection ->
-        val statement = connection.prepareStatement(StreamQueries.SELECT_ALL_STREAMS_CURSOR)
-        if (cursor == null) {
-            statement.setNull(1, Types.TIMESTAMP)
-            statement.setNull(2, Types.TIMESTAMP)
-        } else {
-            val timestamp = Timestamp.valueOf(cursor.toJavaLocalDateTime())
-            statement.setTimestamp(1, timestamp)
-            statement.setTimestamp(2, timestamp)
-        }
-        statement.setInt(3, limit)
-
-        val resultSet = statement.executeQuery()
-        val streams = mutableListOf<StreamDto>()
-
-        while (resultSet.next()) {
-            val stream = resultSet.toStreamDataModel()
-            stream.categories = categorySchema.getCategoriesByStreamId(stream.id!!)
-            stream.tags = tagSchema.getTagsByStreamId(stream.id)
-
-            stream.thumbnailData = stream.thumbnailId?.let { thumbnailId ->
-                val thumbnailBytes = gridFSService.fetchImage(ObjectId(thumbnailId))
-                if (thumbnailBytes.isNotEmpty()) {
-                    "data:image/jpeg;base64," + Base64.getEncoder().encodeToString(thumbnailBytes)
-                } else {
-                    null
-                }
+        connection.prepareStatement(StreamQueries.SELECT_ALL_STREAMS_CURSOR).use { statement ->
+            if (cursor == null) {
+                statement.setNull(1, Types.TIMESTAMP)
+                statement.setNull(2, Types.TIMESTAMP)
+            } else {
+                val timestamp = Timestamp.valueOf(cursor.toJavaLocalDateTime())
+                statement.setTimestamp(1, timestamp)
+                statement.setTimestamp(2, timestamp)
             }
+            statement.setInt(3, limit)
 
-            streams.add(stream)
+            statement.executeQuery().use { resultSet ->
+                val streams = mutableListOf<StreamDto>()
+                while (resultSet.next()) {
+                    val stream = resultSet.toStreamDataModel()
+                    stream.categories = categorySchema.getCategoriesByStreamId(stream.id!!, connection)
+                    stream.tags = tagSchema.getTagsByStreamId(stream.id!!)
+                    stream.thumbnailData = stream.thumbnailId?.let { thumbnailId ->
+                        val thumbnailBytes = gridFSService.fetchImage(ObjectId(thumbnailId))
+                        if (thumbnailBytes.isNotEmpty()) {
+                            "data:image/jpeg;base64," + Base64.getEncoder().encodeToString(thumbnailBytes)
+                        } else {
+                            null
+                        }
+                    }
+                    streams.add(stream)
+                }
+                streams
+            }
         }
-
-        return@dbQuery streams
     }
 
     suspend fun fetchStreamsByCategory(categoryId: Int, page: Int, pageSize: Int): List<StreamDto> = dbQuery { connection ->
-        val statement = connection.prepareStatement(StreamQueries.SELECT_STREAMS_BY_CATEGORY_PAGINATED)
-        statement.setInt(1, categoryId)
-        statement.setInt(2, pageSize)
-        statement.setInt(3, (page - 1) * pageSize)
-
-        val resultSet = statement.executeQuery()
-        val streams = mutableListOf<StreamDto>()
-
-        while (resultSet.next()) {
-            streams.add(resultSet.toStreamDataModelWithThumbnail())
+        connection.prepareStatement(StreamQueries.SELECT_STREAMS_BY_CATEGORY_PAGINATED).use { statement ->
+            statement.setInt(1, categoryId)
+            statement.setInt(2, pageSize)
+            statement.setInt(3, (page - 1) * pageSize)
+            statement.executeQuery().use { resultSet ->
+                val streams = mutableListOf<StreamDto>()
+                while (resultSet.next()) {
+                    streams.add(resultSet.toStreamDataModelWithThumbnail())
+                }
+                streams
+            }
         }
-        return@dbQuery streams
     }
 
     suspend fun fetchStreamsByTag(tag: String, page: Int, pageSize: Int): List<StreamDto> = dbQuery { connection ->
-        val statement = connection.prepareStatement(StreamQueries.SELECT_STREAMS_BY_TAG_PAGINATED)
-        statement.setString(1, tag)
-        statement.setInt(2, pageSize)
-        statement.setInt(3, (page - 1) * pageSize)
-
-        val resultSet = statement.executeQuery()
-        val streams = mutableListOf<StreamDto>()
-
-        while (resultSet.next()) {
-            streams.add(resultSet.toStreamDataModelWithThumbnail())
+        connection.prepareStatement(StreamQueries.SELECT_STREAMS_BY_TAG_PAGINATED).use { statement ->
+            statement.setString(1, tag)
+            statement.setInt(2, pageSize)
+            statement.setInt(3, (page - 1) * pageSize)
+            statement.executeQuery().use { resultSet ->
+                val streams = mutableListOf<StreamDto>()
+                while (resultSet.next()) {
+                    streams.add(resultSet.toStreamDataModelWithThumbnail())
+                }
+                streams
+            }
         }
-
-        return@dbQuery streams
     }
 
     suspend fun findByStreamKey(streamKey: String): StreamDto? = dbQuery { connection ->
-        val stmt = connection.prepareStatement(StreamQueries.SELECT_STREAM_BY_STREAM_KEY)
-        stmt.setString(1, streamKey)
-        val rs = stmt.executeQuery()
-        if (rs.next()) {
-            val stream = rs.toStreamDataModel()
-            stream.categories = categorySchema.getCategoriesByStreamId(stream.id!!)
-            stream.tags = tagSchema.getTagsByStreamId(stream.id)
-            return@dbQuery stream
+        connection.prepareStatement(StreamQueries.SELECT_STREAM_BY_STREAM_KEY).use { stmt ->
+            stmt.setString(1, streamKey)
+            stmt.executeQuery().use { rs ->
+                if (rs.next()) {
+                    val stream = rs.toStreamDataModel()
+                    stream.categories = categorySchema.getCategoriesByStreamId(stream.id!!, connection)
+                    stream.tags = tagSchema.getTagsByStreamId(stream.id!!)
+                    stream
+                } else null
+            }
         }
-        return@dbQuery null
     }
 
     suspend fun setPublishInfo(
@@ -183,16 +184,15 @@ class StreamSchema(
         publishTokenJti: String,
         tokenExpiresAtInstant: Instant
     ): Boolean = dbQuery { connection ->
-        val stmt = connection.prepareStatement(StreamQueries.UPDATE_STREAM_PUBLISH_INFO)
-        stmt.setString(1, streamKey)
-        stmt.setString(2, publishTokenJti)
-
-        val epochMillis = tokenExpiresAtInstant.toEpochMilliseconds()
-        stmt.setTimestamp(3, Timestamp.from(java.time.Instant.ofEpochMilli(epochMillis)))
-
-        stmt.setString(4, StreamStatus.CREATED.dbValue)
-        stmt.setInt(5, streamId)
-        stmt.executeUpdate() > 0
+        connection.prepareStatement(StreamQueries.UPDATE_STREAM_PUBLISH_INFO).use { stmt ->
+            stmt.setString(1, streamKey)
+            stmt.setString(2, publishTokenJti)
+            val epochMillis = tokenExpiresAtInstant.toEpochMilliseconds()
+            stmt.setTimestamp(3, Timestamp.from(java.time.Instant.ofEpochMilli(epochMillis)))
+            stmt.setString(4, StreamStatus.CREATED.dbValue)
+            stmt.setInt(5, streamId)
+            stmt.executeUpdate() > 0
+        }
     }
 
     suspend fun markPublishingIfNotAlready(streamKey: String): Boolean = dbQuery { connection ->
@@ -200,34 +200,36 @@ class StreamSchema(
         try {
             connection.autoCommit = false
 
-            val updateStmt = connection.prepareStatement(StreamQueries.MARK_PUBLISHING)
-            updateStmt.setString(1, StreamStatus.PUBLISHING.dbValue)
-            updateStmt.setString(2, streamKey)
-            updateStmt.setString(3, StreamStatus.PUBLISHING.dbValue)
+            connection.prepareStatement(StreamQueries.MARK_PUBLISHING).use { updateStmt ->
+                updateStmt.setString(1, StreamStatus.PUBLISHING.dbValue)
+                updateStmt.setString(2, streamKey)
+                updateStmt.setString(3, StreamStatus.PUBLISHING.dbValue)
+                updateStmt.executeQuery().use { rs ->
+                    if (!rs.next()) {
+                        connection.prepareStatement(StreamQueries.GET_STREAM_STATUS).use { checkStmt ->
+                            checkStmt.setString(1, streamKey)
+                            checkStmt.executeQuery().use { crs ->
+                                val alreadyPublishing = if (crs.next()) {
+                                    StreamStatus.fromDb(crs.getString("status")) == StreamStatus.PUBLISHING
+                                } else {
+                                    false
+                                }
+                                connection.commit()
+                                return@dbQuery alreadyPublishing
+                            }
+                        }
+                    }
 
-            val rs = updateStmt.executeQuery()
-            if (!rs.next()) {
-                val checkStmt = connection.prepareStatement(StreamQueries.GET_STREAM_STATUS)
-                checkStmt.setString(1, streamKey)
-                val crs = checkStmt.executeQuery()
-                val alreadyPublishing = if (crs.next()) {
-                    StreamStatus.fromDb(crs.getString("status")) == StreamStatus.PUBLISHING
-                } else {
-                    false
+                    val userId = rs.getInt("user_id")
+                    connection.prepareStatement(StreamQueries.UPDATE_USER_LIVE_STATUS).use { setLiveStmt ->
+                        setLiveStmt.setBoolean(1, true)
+                        setLiveStmt.setInt(2, userId)
+                        setLiveStmt.executeUpdate()
+                    }
+                    connection.commit()
+                    return@dbQuery true
                 }
-                connection.commit()
-                return@dbQuery alreadyPublishing
             }
-
-            val userId = rs.getInt("user_id")
-
-            val setLiveStmt = connection.prepareStatement(StreamQueries.UPDATE_USER_LIVE_STATUS)
-            setLiveStmt.setBoolean(1, true)
-            setLiveStmt.setInt(2, userId)
-            setLiveStmt.executeUpdate()
-
-            connection.commit()
-            return@dbQuery true
         } catch (ex: Exception) {
             try { connection.rollback() } catch (_: Exception) {}
             throw ex
@@ -244,34 +246,34 @@ class StreamSchema(
         try {
             connection.autoCommit = false
 
-            val updateStmt = connection.prepareStatement(StreamQueries.MARK_ENDED)
-            updateStmt.setString(1, StreamStatus.ENDED.dbValue)
-            val epochMillis = endedAtInstant.toEpochMilliseconds()
-            updateStmt.setTimestamp(2, java.sql.Timestamp.from(java.time.Instant.ofEpochMilli(epochMillis)))
-            updateStmt.setString(3, streamKey)
-            updateStmt.setString(4, StreamStatus.PUBLISHING.dbValue)
-
-            val rs = updateStmt.executeQuery()
-            if (!rs.next()) {
-                connection.commit()
-                return@dbQuery false
+            connection.prepareStatement(StreamQueries.MARK_ENDED).use { updateStmt ->
+                updateStmt.setString(1, StreamStatus.ENDED.dbValue)
+                val epochMillis = endedAtInstant.toEpochMilliseconds()
+                updateStmt.setTimestamp(2, java.sql.Timestamp.from(java.time.Instant.ofEpochMilli(epochMillis)))
+                updateStmt.setString(3, streamKey)
+                updateStmt.setString(4, StreamStatus.PUBLISHING.dbValue)
+                updateStmt.executeQuery().use { rs ->
+                    if (!rs.next()) {
+                        connection.commit()
+                        return@dbQuery false
+                    }
+                    val userId = rs.getInt("user_id")
+                    connection.prepareStatement(StreamQueries.COUNT_USER_PUBLISHING_STREAMS).use { countStmt ->
+                        countStmt.setInt(1, userId)
+                        countStmt.setString(2, StreamStatus.PUBLISHING.dbValue)
+                        countStmt.executeQuery().use { crs ->
+                            val publishingCount = if (crs.next()) crs.getInt("cnt") else 0
+                            connection.prepareStatement(StreamQueries.UPDATE_USER_LIVE_STATUS).use { setLiveStmt ->
+                                setLiveStmt.setBoolean(1, publishingCount > 0)
+                                setLiveStmt.setInt(2, userId)
+                                setLiveStmt.executeUpdate()
+                            }
+                        }
+                    }
+                    connection.commit()
+                    return@dbQuery true
+                }
             }
-
-            val userId = rs.getInt("user_id")
-
-            val countStmt = connection.prepareStatement(StreamQueries.COUNT_USER_PUBLISHING_STREAMS)
-            countStmt.setInt(1, userId)
-            countStmt.setString(2, StreamStatus.PUBLISHING.dbValue)
-            val crs = countStmt.executeQuery()
-            val publishingCount = if (crs.next()) crs.getInt("cnt") else 0
-
-            val setLiveStmt = connection.prepareStatement(StreamQueries.UPDATE_USER_LIVE_STATUS)
-            setLiveStmt.setBoolean(1, publishingCount > 0)
-            setLiveStmt.setInt(2, userId)
-            setLiveStmt.executeUpdate()
-
-            connection.commit()
-            return@dbQuery true
         } catch (ex: Exception) {
             try { connection.rollback() } catch (_: Exception) {}
             throw ex
@@ -285,33 +287,33 @@ class StreamSchema(
         try {
             connection.autoCommit = false
 
-            val updateStmt = connection.prepareStatement(StreamQueries.MARK_TERMINATED)
-            updateStmt.setString(1, StreamStatus.TERMINATED.dbValue)
-            updateStmt.setString(2, reason)
-            updateStmt.setString(3, streamKey)
-            updateStmt.setString(4, StreamStatus.TERMINATED.dbValue)
-
-            val rs = updateStmt.executeQuery()
-            if (!rs.next()) {
-                connection.commit()
-                return@dbQuery false
+            connection.prepareStatement(StreamQueries.MARK_TERMINATED).use { updateStmt ->
+                updateStmt.setString(1, StreamStatus.TERMINATED.dbValue)
+                updateStmt.setString(2, reason)
+                updateStmt.setString(3, streamKey)
+                updateStmt.setString(4, StreamStatus.TERMINATED.dbValue)
+                updateStmt.executeQuery().use { rs ->
+                    if (!rs.next()) {
+                        connection.commit()
+                        return@dbQuery false
+                    }
+                    val userId = rs.getInt("user_id")
+                    connection.prepareStatement(StreamQueries.COUNT_USER_PUBLISHING_STREAMS).use { countStmt ->
+                        countStmt.setInt(1, userId)
+                        countStmt.setString(2, StreamStatus.PUBLISHING.dbValue)
+                        countStmt.executeQuery().use { crs ->
+                            val publishingCount = if (crs.next()) crs.getInt("cnt") else 0
+                            connection.prepareStatement(StreamQueries.UPDATE_USER_LIVE_STATUS).use { setLiveStmt ->
+                                setLiveStmt.setBoolean(1, publishingCount > 0)
+                                setLiveStmt.setInt(2, userId)
+                                setLiveStmt.executeUpdate()
+                            }
+                        }
+                    }
+                    connection.commit()
+                    return@dbQuery true
+                }
             }
-
-            val userId = rs.getInt("user_id")
-
-            val countStmt = connection.prepareStatement(StreamQueries.COUNT_USER_PUBLISHING_STREAMS)
-            countStmt.setInt(1, userId)
-            countStmt.setString(2, StreamStatus.PUBLISHING.dbValue)
-            val crs = countStmt.executeQuery()
-            val publishingCount = if (crs.next()) crs.getInt("cnt") else 0
-
-            val setLiveStmt = connection.prepareStatement(StreamQueries.UPDATE_USER_LIVE_STATUS)
-            setLiveStmt.setBoolean(1, publishingCount > 0)
-            setLiveStmt.setInt(2, userId)
-            setLiveStmt.executeUpdate()
-
-            connection.commit()
-            return@dbQuery true
         } catch (ex: Exception) {
             try { connection.rollback() } catch (_: Exception) {}
             throw ex
@@ -321,13 +323,11 @@ class StreamSchema(
     }
 
     suspend fun getStreamStatus(streamKey: String): StreamStatus? = dbQuery { connection ->
-        val stmt = connection.prepareStatement(StreamQueries.GET_STREAM_STATUS)
-        stmt.setString(1, streamKey)
-        val rs = stmt.executeQuery()
-        if (rs.next()) {
-            StreamStatus.fromDb(rs.getString("status"))
-        } else {
-            null
+        connection.prepareStatement(StreamQueries.GET_STREAM_STATUS).use { stmt ->
+            stmt.setString(1, streamKey)
+            stmt.executeQuery().use { rs ->
+                if (rs.next()) StreamStatus.fromDb(rs.getString("status")) else null
+            }
         }
     }
 
@@ -336,41 +336,45 @@ class StreamSchema(
         try {
             connection.autoCommit = false
 
-            val selectStmt = connection.prepareStatement(StreamQueries.GET_STREAM_FOR_DELETE)
-            selectStmt.setInt(1, streamId)
-            val srs = selectStmt.executeQuery()
-            if (!srs.next()) {
-                connection.commit()
-                return@dbQuery false
+            connection.prepareStatement(StreamQueries.GET_STREAM_FOR_DELETE).use { selectStmt ->
+                selectStmt.setInt(1, streamId)
+                selectStmt.executeQuery().use { srs ->
+                    if (!srs.next()) {
+                        connection.commit()
+                        return@dbQuery false
+                    }
+
+                    val userId = srs.getInt("user_id")
+                    val status = srs.getString("status") ?: "created"
+
+                    connection.prepareStatement(StreamQueries.DELETE_STREAM_BY_ID).use { deleteStmt ->
+                        deleteStmt.setInt(1, streamId)
+                        val deleted = deleteStmt.executeUpdate() > 0
+                        if (!deleted) {
+                            connection.commit()
+                            return@dbQuery false
+                        }
+                    }
+
+                    if ("publishing".equals(status, ignoreCase = true)) {
+                        connection.prepareStatement(StreamQueries.COUNT_USER_PUBLISHING_STREAMS).use { countStmt ->
+                            countStmt.setInt(1, userId)
+                            countStmt.setString(2, StreamStatus.PUBLISHING.dbValue)
+                            countStmt.executeQuery().use { crs ->
+                                val publishingCount = if (crs.next()) crs.getInt("cnt") else 0
+                                connection.prepareStatement(StreamQueries.UPDATE_USER_LIVE_STATUS).use { setLiveStmt ->
+                                    setLiveStmt.setBoolean(1, publishingCount > 0)
+                                    setLiveStmt.setInt(2, userId)
+                                    setLiveStmt.executeUpdate()
+                                }
+                            }
+                        }
+                    }
+
+                    connection.commit()
+                    return@dbQuery true
+                }
             }
-
-            val userId = srs.getInt("user_id")
-            val status = srs.getString("status") ?: "created"
-
-            val deleteStmt = connection.prepareStatement(StreamQueries.DELETE_STREAM_BY_ID)
-            deleteStmt.setInt(1, streamId)
-            val deleted = deleteStmt.executeUpdate() > 0
-
-            if (!deleted) {
-                connection.commit()
-                return@dbQuery false
-            }
-
-            if ("publishing".equals(status, ignoreCase = true)) {
-                val countStmt = connection.prepareStatement(StreamQueries.COUNT_USER_PUBLISHING_STREAMS)
-                countStmt.setInt(1, userId)
-                countStmt.setString(2, StreamStatus.PUBLISHING.dbValue)
-                val crs = countStmt.executeQuery()
-                val publishingCount = if (crs.next()) crs.getInt("cnt") else 0
-
-                val setLiveStmt = connection.prepareStatement(StreamQueries.UPDATE_USER_LIVE_STATUS)
-                setLiveStmt.setBoolean(1, publishingCount > 0)
-                setLiveStmt.setInt(2, userId)
-                setLiveStmt.executeUpdate()
-            }
-
-            connection.commit()
-            return@dbQuery true
         } catch (ex: Exception) {
             try { connection.rollback() } catch (_: Exception) {}
             throw ex
@@ -380,21 +384,24 @@ class StreamSchema(
     }
 
     suspend fun deleteByStreamKey(streamKey: String): Boolean = dbQuery { connection ->
-        val stmt = connection.prepareStatement(StreamQueries.DELETE_STREAM_BY_STREAM_KEY)
-        stmt.setString(1, streamKey)
-        stmt.executeUpdate() > 0
+        connection.prepareStatement(StreamQueries.DELETE_STREAM_BY_STREAM_KEY).use { stmt ->
+            stmt.setString(1, streamKey)
+            stmt.executeUpdate() > 0
+        }
     }
 
     suspend fun fetchLiveStreams(limit: Int = 10): List<StreamDto> = dbQuery { connection ->
-        val statement = connection.prepareStatement(StreamQueries.SELECT_LIVE_STREAMS)
-        statement.setInt(1, limit)
-        val rs = statement.executeQuery()
-        val streams = mutableListOf<StreamDto>()
-        while (rs.next()) {
-            val s = rs.toStreamDataModel()
-            streams.add(s)
+        connection.prepareStatement(StreamQueries.SELECT_LIVE_STREAMS).use { statement ->
+            statement.setInt(1, limit)
+            statement.executeQuery().use { rs ->
+                val streams = mutableListOf<StreamDto>()
+                while (rs.next()) {
+                    val s = rs.toStreamDataModel()
+                    streams.add(s)
+                }
+                streams
+            }
         }
-        return@dbQuery streams
     }
 
     // Helper methods
@@ -414,7 +421,7 @@ class StreamSchema(
     private fun ResultSet.toStreamDataModel(): StreamDto {
         val startsAtInstant = getTimestamp("starts_at")?.toInstant()
         val createdAtInstant = getTimestamp("created_at")!!.toInstant()
-        val endedAtInstant = getTimestamp("ended_at")?.toInstant()
+        // val endedAtInstant = getTimestamp("ended_at")?.toInstant() // currently unused
 
         val statusStr = try { getString("status") } catch (_: Exception) { null }
         val statusEnum = StreamStatus.fromDb(statusStr)
@@ -438,10 +445,14 @@ class StreamSchema(
     }
 
     private suspend fun <T> dbQuery(block: suspend (Connection) -> T): T = withContext(Dispatchers.IO) {
+        var conn: Connection? = null
         try {
-            block(dbConnection)
+            conn = dataSource.connection
+            block(conn)
         } catch (e: SQLException) {
             throw RuntimeException("Database query failed: ${e.message}", e)
+        } finally {
+            try { conn?.close() } catch (_: Exception) {}
         }
     }
 }

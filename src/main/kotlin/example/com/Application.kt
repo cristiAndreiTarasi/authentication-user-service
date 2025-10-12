@@ -1,12 +1,13 @@
 package example.com
 
+import com.zaxxer.hikari.HikariDataSource
 import example.com.config.Constants
 import example.com.plugins.configureHTTP
 import example.com.plugins.configureRouting
 import example.com.plugins.configureSecurity
 import example.com.plugins.configureSerialization
 import example.com.plugins.configureSockets
-import example.com.plugins.connectToPostgres
+import example.com.plugins.createPostgresDataSource
 import example.com.schemas.CategorySchema
 import example.com.schemas.EventSchema
 import example.com.schemas.StreamSchema
@@ -20,34 +21,25 @@ import example.com.services.role.RoleService
 import example.com.services.token.TokenConfig
 import example.com.services.token.TokenService
 import example.com.services.ws_session.PermissionManager
-import io.ktor.client.HttpClient
-import io.ktor.client.engine.cio.*
-import io.ktor.client.plugins.HttpTimeout
-import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
-import io.ktor.client.plugins.logging.LogLevel
-import io.ktor.client.plugins.logging.Logger
-import io.ktor.client.plugins.logging.Logging
-import io.ktor.client.plugins.logging.SIMPLE
-import io.ktor.serialization.kotlinx.*
-import io.ktor.serialization.kotlinx.json.json
 import io.ktor.server.application.Application
 import io.ktor.server.application.ApplicationStopping
 import io.ktor.server.netty.EngineMain
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import org.litote.kmongo.KMongo
-import java.sql.Connection
 import java.time.Duration
+import javax.sql.DataSource
 
 fun main(args: Array<String>): Unit = EngineMain.main(args)
 
 fun Application.module() {
     val httpClient = createHttpClient(appJson)
 
-    val postgresConnection: Connection = connectToPostgres(embedded = false)
     // val mongoDatabase: MongoDatabase = connectToMongoDB()
     val mongoClient = KMongo.createClient(Constants.CONNECTION_STRING)
     val mongoDatabase = mongoClient.getDatabase(Constants.MONGODB_CLUSTER)
+
+    val dataSource: DataSource = createPostgresDataSource(embedded = false)
 
     /*
     * token instantiation
@@ -87,13 +79,13 @@ fun Application.module() {
 
     val hashingService = HashingService()
     val roleService = RoleService()
-    val gridFsService = GridFSService(mongoDatabase, postgresConnection)
-    val userSchema = UserSchema(postgresConnection, gridFsService)
-    val tokenSchema = TokenSchema(postgresConnection)
-    val categorySchema = CategorySchema(postgresConnection)
-    val tagSchema = TagSchema(postgresConnection)
-    val streamSchema = StreamSchema(postgresConnection, categorySchema, tagSchema, gridFsService)
-    val eventSchema = EventSchema(postgresConnection, categorySchema, tagSchema)
+    val gridFsService = GridFSService(mongoDatabase, dataSource)
+    val userSchema = UserSchema(dataSource, gridFsService)
+    val tokenSchema = TokenSchema(dataSource)
+    val categorySchema = CategorySchema(dataSource)
+    val tagSchema = TagSchema(dataSource)
+    val streamSchema = StreamSchema(dataSource, categorySchema, tagSchema, gridFsService)
+    val eventSchema = EventSchema(dataSource, categorySchema, tagSchema)
 
     val host = environment.config.property("db.redis.host").getString()
     val port = environment.config.property("db.redis.port").getString()
@@ -116,7 +108,7 @@ fun Application.module() {
     configureRouting(
         userSchema, tokenSchema, streamSchema,
         eventSchema, tagSchema, categorySchema,
-        hashingService, postgresConnection, gridFsService,
+        hashingService, dataSource, gridFsService,
         httpClient, authTokenService, publishTokenService,
         redisManager
     )
@@ -136,5 +128,10 @@ fun Application.module() {
         cleanupJob.cancel() // Stop job when server stops
         redisManager.close()
         httpClient.close()
+
+        // Close Hikari if we have it
+        try {
+            (dataSource as? HikariDataSource)?.close()
+        } catch (_: Throwable) {}
     }
 }

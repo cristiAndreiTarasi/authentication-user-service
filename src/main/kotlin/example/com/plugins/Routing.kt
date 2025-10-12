@@ -25,6 +25,7 @@ import io.ktor.server.application.Application
 import io.ktor.server.routing.routing
 import okhttp3.OkHttpClient
 import java.sql.Connection
+import javax.sql.DataSource
 
 fun Application.configureRouting(
     userSchema: UserSchema,
@@ -34,7 +35,7 @@ fun Application.configureRouting(
     tagSchema: TagSchema,
     categorySchema: CategorySchema,
     hashingService: HashingService,
-    postgresConnection: Connection,
+    dataSource: DataSource,
     gridFSService: GridFSService,
     httpClient: HttpClient,
     authTokenService: ITokenService,
@@ -43,7 +44,7 @@ fun Application.configureRouting(
 ) {
     routing {
         authenticationRoutes(userSchema, tokenSchema, hashingService, authTokenService)
-        userRoutes(userSchema, tokenSchema, postgresConnection, gridFSService)
+        userRoutes(userSchema, tokenSchema, dataSource, gridFSService)
         streamRoutes(streamSchema, gridFSService, publishTokenService, userSchema)
         eventRoutes(eventSchema, gridFSService, userSchema, streamSchema)
         tagRoutes(tagSchema)

@@ -1,6 +1,7 @@
 package example.com.services.gridfs
 
 import com.mongodb.client.MongoDatabase
+import com.mongodb.client.gridfs.GridFSBucket
 import com.mongodb.client.gridfs.GridFSBuckets
 import com.mongodb.client.gridfs.model.GridFSUploadOptions
 import kotlinx.coroutines.Dispatchers
@@ -11,6 +12,8 @@ import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.InputStream
 import java.sql.Connection
+import java.sql.SQLException
+import javax.sql.DataSource
 
 /**
  * Interface for handling image-related operations using GridFS.
@@ -66,7 +69,7 @@ interface IGridFSService {
 
 class GridFSService(
     private val mongoDatabase: MongoDatabase,
-    private val psqlConnection: Connection
+    private val dataSource: DataSource
 ) : IGridFSService {
     companion object {
         private const val SELECT_AVATAR_ID = "SELECT image_id FROM users WHERE id = ?"
@@ -74,17 +77,15 @@ class GridFSService(
         private const val SELECT_EVENT_THUMBNAIL_ID = "SELECT thumbnail_id FROM events WHERE id = ?"
     }
 
-    private val gridFSBuckets = GridFSBuckets.create(mongoDatabase, "images")
+    private val gridFSBucket: GridFSBucket = GridFSBuckets.create(mongoDatabase, "images")
+    private val imagesCollection = mongoDatabase.getCollection("images")
 
-    override suspend fun getEventThumbnailIdByEventId(eventId: Int): String? = withContext(Dispatchers.IO) {
-        val statement = psqlConnection.prepareStatement(SELECT_EVENT_THUMBNAIL_ID)
-        statement.setInt(1, eventId)
-        val resultSet = statement.executeQuery()
-
-        if (resultSet.next()) {
-            resultSet.getString("thumbnail_id")
-        } else {
-            null
+    override suspend fun getEventThumbnailIdByEventId(eventId: Int): String? = dbQuery { conn ->
+        conn.prepareStatement(SELECT_EVENT_THUMBNAIL_ID).use { stmt ->
+            stmt.setInt(1, eventId)
+            stmt.executeQuery().use { rs ->
+                if (rs.next()) rs.getString("thumbnail_id") else null
+            }
         }
     }
 
@@ -93,68 +94,61 @@ class GridFSService(
         imageData: ByteArray,
         transformation: (ByteArray) -> ByteArray
     ): ObjectId = withContext(Dispatchers.IO) {
-        val previousImage = getAvatarIdByUserId(userId)?.let { ObjectId(it) }
-        previousImage?.let { deleteImage(it) }
-
-        // Process the incoming image bytes to create a thumbnail with 9:16 aspect ratio.
-        val processedImage = transformation(imageData)
-
-        val options = GridFSUploadOptions().chunkSizeBytes(255 * 1024) // 255KB
-        val streamToUploadFrom: InputStream = ByteArrayInputStream(processedImage)
-        val fileId = gridFSBuckets.uploadFromStream("image", streamToUploadFrom, options)
-        val imagesCollection = mongoDatabase.getCollection("images")
-        val imageDocument = Document("userId", userId).append("imageId", fileId)
-
-        imagesCollection.insertOne(imageDocument)
+        // delete previous avatar if any — but the caller is responsible for transactional semantics
+        val processed = transformation(imageData)
+        val options = com.mongodb.client.gridfs.model.GridFSUploadOptions().chunkSizeBytes(255 * 1024)
+        val stream = ByteArrayInputStream(processed)
+        val fileId = gridFSBucket.uploadFromStream("image", stream, options)
+        imagesCollection.insertOne(Document("userId", userId).append("imageId", fileId))
         fileId
     }
 
     override suspend fun fetchImage(imageId: ObjectId): ByteArray = withContext(Dispatchers.IO) {
-        val streamToDownloadTo = ByteArrayOutputStream()
-        gridFSBuckets.downloadToStream(imageId, streamToDownloadTo)
-        streamToDownloadTo.toByteArray()
+        val baos = ByteArrayOutputStream()
+        gridFSBucket.downloadToStream(imageId, baos)
+        baos.toByteArray()
     }
 
     override suspend fun deleteImage(imageId: ObjectId): Boolean = withContext(Dispatchers.IO) {
-        val imagesCollection = mongoDatabase.getCollection("images")
-        val gridFSBucket = GridFSBuckets.create(mongoDatabase, "images")
-
-        // Delete from metadata collection
-        val deleteMetadataResult = imagesCollection.deleteOne(Document("imageId", imageId))
-
-        // Delete from GridFS
-        val deleteGridFSResult = try {
+        // delete metadata
+        val deleteMetadata = imagesCollection.deleteOne(Document("imageId", imageId))
+        // delete GridFS file
+        val deletedGridFs = try {
             gridFSBucket.delete(imageId)
             true
         } catch (e: Exception) {
             false
         }
-
-        // Return true if both deletions were successful
-        deleteMetadataResult.deletedCount > 0 && deleteGridFSResult
+        deleteMetadata.deletedCount > 0 && deletedGridFs
     }
 
-    override suspend fun getAvatarIdByUserId(userId: Int): String? = withContext(Dispatchers.IO) {
-        val statement = psqlConnection.prepareStatement(SELECT_AVATAR_ID)
-        statement.setInt(1, userId)
-        val resultSet = statement.executeQuery()
-
-        if (resultSet.next()) {
-            resultSet.getString("image_id")
-        } else {
-            null
+    override suspend fun getAvatarIdByUserId(userId: Int): String? = dbQuery { conn ->
+        conn.prepareStatement(SELECT_AVATAR_ID).use { stmt ->
+            stmt.setInt(1, userId)
+            stmt.executeQuery().use { rs ->
+                if (rs.next()) rs.getString("image_id") else null
+            }
         }
     }
 
-    override suspend fun getThumbnailIdByUserId(streamId: Int): String? = withContext(Dispatchers.IO) {
-        val statement = psqlConnection.prepareStatement(SELECT_THUMBNAIL_ID)
-        statement.setInt(1, streamId)
-        val resultSet = statement.executeQuery()
+    override suspend fun getThumbnailIdByUserId(streamId: Int): String? = dbQuery { conn ->
+        conn.prepareStatement(SELECT_THUMBNAIL_ID).use { stmt ->
+            stmt.setInt(1, streamId)
+            stmt.executeQuery().use { rs ->
+                if (rs.next()) rs.getString("thumbnail_id") else null
+            }
+        }
+    }
 
-        if (resultSet.next()) {
-            resultSet.getString("thumbnail_id")
-        } else {
-            null
+    private suspend fun <T> dbQuery(block: suspend (Connection) -> T): T = withContext(Dispatchers.IO) {
+        var conn: Connection? = null
+        try {
+            conn = dataSource.connection
+            block(conn)
+        } catch (e: SQLException) {
+            throw RuntimeException("Database query failed: ${e.message}", e)
+        } finally {
+            try { conn?.close() } catch (_: Exception) {}
         }
     }
 }

@@ -4,6 +4,8 @@ import example.com.LiveEventJson
 import example.com.routes.dtos.LiveEvent
 import example.com.routes.dtos.withDefaults
 import example.com.services.ws_session.SessionManager
+import io.ktor.server.application.application
+import io.ktor.server.application.log
 import io.ktor.websocket.Frame
 import io.lettuce.core.Consumer
 import io.lettuce.core.RedisClient
@@ -141,8 +143,10 @@ class RedisManager(redisUrl: String) {
 
                 for (msg in messages) {
                     val json = msg.body["event"] ?: continue
+                    println("consumeEvents: got message id=${msg.id} rawJson=${json.take(400)}")
                     try {
                         val event = LiveEventJson.decodeFromString<LiveEvent>(json)
+                        println("consumeEvents: decoded eventType=${event::class.simpleName} roomId=${event.roomId}")
                         broadcastToRoom(event.roomId, event)
                         // Acknowledge after successful broadcast
                         consumerCommands.xack(streamKey, consumerGroup, msg.id)
@@ -166,10 +170,14 @@ private suspend fun broadcastToRoom(roomId: String, event: LiveEvent) {
     val safe = event.withDefaults()
     val json = LiveEventJson.encodeToString(PolymorphicSerializer(LiveEvent::class), safe)
 
-    SessionManager.getRoomSessions(roomId).forEach { session ->
+    val sessions = SessionManager.getRoomSessions(roomId)
+    println("broadcastToRoom: roomId=$roomId sessions=${sessions.size} event=${event::class.simpleName} json=${json.take(400)}")
+
+    sessions.forEach { session ->
         try {
             session.send(Frame.Text(json))
-        } catch (_: Throwable) {
+        } catch (e: Throwable) {
+            println(("broadcastToRoom: failed to send to session for room=$roomId: ${e.message}, $e"))
             SessionManager.removeSession(session)
         }
     }
