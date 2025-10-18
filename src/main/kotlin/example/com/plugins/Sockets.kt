@@ -1,6 +1,9 @@
 package example.com.plugins
 
 import example.com.LiveEventJson
+import example.com.ModerationMessages
+import example.com.ModerationReason
+import example.com.ModerationSeverity
 import example.com.routes.dtos.LiveEvent
 import example.com.routes.dtos.withDefaults
 import example.com.schemas.UserSchema
@@ -139,6 +142,13 @@ fun Application.configureSockets(
 
         val json = LiveEventJson.encodeToString(liveEventPolymorphic, streamStatsEvent.withDefaults())
         session.send(Frame.Text(json))
+
+        /*val metadata = redisManager.getStreamMetadata(roomId)
+        if (metadata["proxy_type"] == "audio_only") {
+            val audioEvt = metadata["audio_url"]?.let { LiveEvent.ModerationBlockAudioEvent(roomId = roomId, audioUrl = it, reason = "moderation", message = "This stream is audio-only") }
+            val audioOnlyJson = audioEvt?.let { LiveEventJson.encodeToString(liveEventPolymorphic, it.withDefaults()) }
+            session.send(Frame.Text(audioOnlyJson!!))
+        }*/
     }
 
     suspend fun broadcastStreamOwnerInfo(
@@ -332,37 +342,135 @@ fun Application.configureSockets(
             }
 
             is LiveEvent.ModerationWarningEvent -> {
-                // System-generated moderation warnings - just broadcast to room
+                val sessions = SessionManager.getRoomSessions(roomId)
+                val streamOwnerId = PermissionManager.getStreamOwner(roomId)
+
+                sessions.forEach { session ->
+                    try {
+                        val sessionUserId = SessionManager.getUserId(session)
+                        val isStreamer = sessionUserId == streamOwnerId
+
+                        val reason = try { ModerationReason.valueOf(event.reason.uppercase()) } catch (e: Exception) { ModerationReason.OTHER }
+                        val severity = try { ModerationSeverity.valueOf(event.severity.uppercase()) } catch (e: Exception) { ModerationSeverity.WARNING }
+
+                        // For streamers, show streamer-specific messages
+                        val finalMessage = if (isStreamer) {
+                            ModerationMessages.getStreamerWarningMessage(severity, reason)
+                        } else {
+                            ModerationMessages.getWarningMessage(severity, reason)
+                        }
+
+                        val userSpecificEvent = event.copy(message = finalMessage)
+                        val json = LiveEventJson.encodeToString(liveEventPolymorphic, userSpecificEvent.withDefaults())
+                        session.send(Frame.Text(json))
+                    } catch (e: Exception) {
+                        // ignore send failures
+                    }
+                }
+
+                // Also persist the event in history
                 redisManager.addToStream(event)
             }
 
             is LiveEvent.StreamTerminatedEvent -> {
-                // Stream termination - broadcast and close connections
+                // Broadcast to all sessions in the room (both publisher and consumers)
                 redisManager.addToStream(event)
 
-                // ensure immediate delivery to active sessions BEFORE closing them
-                val json = LiveEventJson.encodeToString(liveEventPolymorphic, event.withDefaults())
-                SessionManager.getRoomSessions(roomId).forEach { session ->
+                val sessions = SessionManager.getRoomSessions(roomId)
+                val streamOwnerId = PermissionManager.getStreamOwner(roomId)
+
+                sessions.forEach { session ->
                     try {
-                        session.send(Frame.Text(json)) // deliver termination
+                        val sessionUserId = SessionManager.getUserId(session)
+                        val isStreamer = sessionUserId == streamOwnerId
+
+                        val reason = try {
+                            ModerationReason.valueOf(event.reason.uppercase())
+                        } catch (e: Exception) {
+                            ModerationReason.OTHER
+                        }
+
+                        val finalMessage = if (isStreamer) {
+                            ModerationMessages.getStreamerTerminationMessage(reason)
+                        } else {
+                            ModerationMessages.getTerminationMessage(reason)
+                        }
+
+                        val userSpecificEvent = event.copy(message = finalMessage)
+                        val json = LiveEventJson.encodeToString(liveEventPolymorphic, userSpecificEvent.withDefaults())
+                        session.send(Frame.Text(json))
                     } catch (e: Exception) {
-                        // ignore send failure
+                        // ignore send failures
                     }
                 }
 
-                // now close all sessions with a policy reason
-                SessionManager.getRoomSessions(roomId).forEach { session ->
+                // Close all sessions
+                sessions.forEach { session ->
                     try {
-                        session.close(CloseReason(CloseReason.Codes.VIOLATED_POLICY, event.message))
+                        session.close(CloseReason(CloseReason.Codes.VIOLATED_POLICY, "Stream terminated"))
                     } catch (e: Exception) {
+                        // ignore
                     } finally {
                         SessionManager.removeSession(session)
                     }
                 }
 
-                // Clean up room state
                 PermissionManager.removeRoom(roomId)
                 redisManager.deleteCounters(roomId)
+            }
+
+            is LiveEvent.ModerationClearEvent -> {
+                // Broadcast clear event to all sessions in the room
+                redisManager.addToStream(event)
+
+                // Also send immediate clear to all connected sessions
+                val sessions = SessionManager.getRoomSessions(roomId)
+                sessions.forEach { session ->
+                    try {
+                        val json = LiveEventJson.encodeToString(liveEventPolymorphic, event.withDefaults())
+                        session.send(Frame.Text(json))
+                    } catch (e: Exception) {
+                        // ignore send failure
+                    }
+                }
+            }
+
+            is LiveEvent.ModerationBlockAudioEvent -> {
+                // Persist user-facing message variations if needed
+                val sessions = SessionManager.getRoomSessions(roomId)
+                val streamOwnerId = PermissionManager.getStreamOwner(roomId)
+
+                sessions.forEach { session ->
+                    try {
+                        val sessionUserId = SessionManager.getUserId(session)
+                        val isStreamer = sessionUserId == streamOwnerId
+
+                        // Compose a message: streamer gets a more instructive message
+                        val finalMessage = if (isStreamer) {
+                            event.message ?: "Your stream switched to audio-only due to policy. Please adjust content."
+                        } else {
+                            event.message ?: "This broadcast has switched to audio-only."
+                        }
+
+                        // Attach message to a copy for user-specific delivery if desired
+                        val userSpecificEvent = event.copy(message = finalMessage)
+
+                        val json = LiveEventJson.encodeToString(liveEventPolymorphic, userSpecificEvent.withDefaults())
+                        session.send(Frame.Text(json))
+                    } catch (e: Exception) {
+                        // ignore send failures for individual sessions
+                    }
+                }
+
+                // Optionally persist audio-only state in Redis for status API (see RedisManager helper below)
+                try {
+                    redisManager.setAudioState(roomId, event.audioUrl)
+                } catch (e: Exception) {
+                    println("Failed to persist audio state for $roomId: ${e.message}")
+                }
+
+                // Also add the event back to stream history if you want clients who connect later to see it:
+                redisManager.addToHistory(roomId, event)
             }
         }
     }
@@ -373,6 +481,17 @@ fun Application.configureSockets(
             val userId = call.parameters["userId"]!!
             val user = userSchema.findById(userId.toInt())
             val username = user?.username ?: "Unknown"
+
+            // Check if session already exists and remove it first
+            SessionManager.getSession(roomId, userId)?.let { existingSession ->
+                try {
+                    existingSession.close(CloseReason(CloseReason.Codes.NORMAL, "Reconnecting"))
+                } catch (e: Exception) {
+                    // Ignore
+                } finally {
+                    SessionManager.removeSession(existingSession)
+                }
+            }
 
             // Check if user is kicked
             if (PermissionManager.isKicked(roomId, userId)) {

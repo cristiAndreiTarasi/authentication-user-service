@@ -26,6 +26,8 @@ val LiveEventJson = Json {
             subclass(LiveEvent.SystemMessage::class)
             subclass(LiveEvent.ModerationWarningEvent::class)
             subclass(LiveEvent.StreamTerminatedEvent::class)
+            subclass(LiveEvent.ModerationClearEvent::class)
+            subclass(LiveEvent.ModerationBlockAudioEvent::class)
         }
     }
 }

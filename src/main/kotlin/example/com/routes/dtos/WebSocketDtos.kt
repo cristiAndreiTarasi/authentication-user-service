@@ -149,8 +149,9 @@ sealed class LiveEvent {
         override val roomId: String,
         val reason: String,
         val message: String,
-        override val timestamp: Long = System.currentTimeMillis(),
-        override val initiatorId: String = "system"
+        val terminatedBy: String = "moderation", // "moderation" or "streamer"
+        override val initiatorId: String? = null,
+        override val timestamp: Long? = null
     ) : LiveEvent()
 
     @Serializable
@@ -160,9 +161,30 @@ sealed class LiveEvent {
         val severity: String, // "warning" | "blocked" | "terminated"
         val reason: String, // "sexual_content" | "violent_content"
         val message: String,
-        override val timestamp: Long = System.currentTimeMillis(),
-        override val initiatorId: String = "system"
+        val terminateAt: Long? = null,
+        override val initiatorId: String? = null,
+        override val timestamp: Long? = null
     ) : LiveEvent()
+
+    @Serializable
+    @SerialName("ModerationClearEvent")
+    data class ModerationClearEvent(
+        override val roomId: String,
+        override val initiatorId: String? = null,
+        override val timestamp: Long? = null
+    ) : LiveEvent()
+
+    @Serializable
+    @SerialName("ModerationBlockAudioEvent")
+    data class ModerationBlockAudioEvent(
+        override val roomId: String,
+        val audioUrl: String,                 // absolute HLS playlist for audio-only
+        val reason: String,                   // e.g. "sexual" | "violent"
+        val message: String? = null,          // optional human readable message
+        override val initiatorId: String? = "system",
+        override val timestamp: Long? = null
+    ) : LiveEvent()
+
 }
 
 // guarantees initiatorId + timestamp even if a callsite forgets them
@@ -231,6 +253,14 @@ fun LiveEvent.withDefaults(): LiveEvent {
                 timestamp = this.timestamp ?: now
             )
         is LiveEvent.StreamTerminatedEvent -> this.copy(
+            initiatorId = this.initiatorId ?: "system",
+            timestamp = this.timestamp ?: now
+        )
+        is LiveEvent.ModerationClearEvent -> this.copy(
+            initiatorId = this.initiatorId ?: "system",
+            timestamp = this.timestamp ?: now
+        )
+        is LiveEvent.ModerationBlockAudioEvent -> this.copy(
             initiatorId = this.initiatorId ?: "system",
             timestamp = this.timestamp ?: now
         )

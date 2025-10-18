@@ -1,6 +1,7 @@
 package example.com.routes
 
 import example.com.LiveEventJson
+import example.com.ModerationMessages
 import example.com.ModerationReason
 import example.com.ModerationSeverity
 import example.com.StreamStatus
@@ -8,6 +9,7 @@ import example.com.routes.dtos.LiveEvent
 import example.com.routes.dtos.withDefaults
 import example.com.schemas.StreamSchema
 import example.com.services.redis.RedisManager
+import example.com.services.ws_session.PermissionManager
 import example.com.services.ws_session.SessionManager
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.application.*
@@ -44,7 +46,9 @@ data class StreamStatusResponse(
     val status: String,
     val sessionCount: Int,
     val isLive: Boolean,
-    val terminated: Boolean
+    val terminated: Boolean,
+    val isAudioOnly: Boolean,
+    val audioUrl: String?
 )
 
 fun Route.moderationRoutes(redisManager: RedisManager, streamSchema: StreamSchema) {
@@ -84,9 +88,8 @@ fun Route.moderationRoutes(redisManager: RedisManager, streamSchema: StreamSchem
 
             try {
                 val request = call.receive<ModerationWarningRequest>()
-                val message = request.message ?: ModerationMessages.getWarningMessage(request.severity, request.reason)
+                val message = ModerationMessages.getWarningMessage(request.severity, request.reason)
 
-                // Resolve canonical room id (prefer streamKey)
                 val roomId = resolveRoomIdParam(rawParam)
 
                 val warningEvent = LiveEvent.ModerationWarningEvent(
@@ -96,13 +99,37 @@ fun Route.moderationRoutes(redisManager: RedisManager, streamSchema: StreamSchem
                     message = message
                 )
 
-                // Add to Redis stream (consumer will broadcast to sessions)
                 redisManager.addToStream(warningEvent)
 
-                // optionally: immediate direct send to sessions (not required if your consumer broadcasts fast)
-                // val safe = warningEvent.withDefaults()
-                // val json = LiveEventJson.encodeToString(PolymorphicSerializer(LiveEvent::class), safe)
-                // SessionManager.getRoomSessions(roomId).forEach { session -> ... }
+                // Immediate dispatch to connected sessions (low-latency)
+                // Compose and send per-session messages (streamer gets different text)
+                val sessions = SessionManager.getRoomSessions(roomId)
+                val streamOwnerId = PermissionManager.getStreamOwner(roomId)
+
+                sessions.forEach { session ->
+                    try {
+                        val sessionUserId = SessionManager.getUserId(session)
+                        val isStreamer = sessionUserId == streamOwnerId
+
+                        // Choose final message text for streamer vs viewers
+                        val finalMessage = if (isStreamer) {
+                            ModerationMessages.getStreamerWarningMessage(request.severity, request.reason)
+                        } else {
+                            ModerationMessages.getWarningMessage(request.severity, request.reason)
+                        }
+
+                        val userSpecificEvent = warningEvent.copy(message = finalMessage)
+                        val liveEventPolymorphic = PolymorphicSerializer(LiveEvent::class)
+
+                        // Attach terminateAt if provided by moderation controller/request
+                        val safeEvent = userSpecificEvent.withDefaults()
+                        val json = LiveEventJson.encodeToString(liveEventPolymorphic, safeEvent)
+                        session.send(Frame.Text(json))
+                    } catch (e: Exception) {
+                        // Best-effort: ignore failures; remove session if dead
+                        try { SessionManager.removeSession(session) } catch (_: Exception) {}
+                    }
+                }
 
                 call.respond(HttpStatusCode.OK, ModerationActionResponse(
                     success = true,
@@ -120,6 +147,35 @@ fun Route.moderationRoutes(redisManager: RedisManager, streamSchema: StreamSchem
             }
         }
 
+        post("/streams/{streamId}/clear") {
+            if (!authenticateModerationRequest(call)) {
+                call.respond(HttpStatusCode.Unauthorized, ModerationActionResponse(false, "Invalid moderation secret", ""))
+                return@post
+            }
+
+            val rawParam = call.parameters["streamId"] ?: run {
+                call.respond(HttpStatusCode.BadRequest, ModerationActionResponse(false, "Missing streamId", ""))
+                return@post
+            }
+
+            try {
+                val roomId = resolveRoomIdParam(rawParam)
+                val clearEvent = LiveEvent.ModerationClearEvent(roomId = roomId)
+
+                redisManager.addToStream(clearEvent)
+
+                call.respond(HttpStatusCode.OK, ModerationActionResponse(
+                    success = true,
+                    message = "Moderation clear sent successfully",
+                    streamId = rawParam
+                ))
+            } catch (e: Exception) {
+                call.respond(HttpStatusCode.InternalServerError, ModerationActionResponse(
+                    false, "Failed to send clear: ${e.message}", rawParam
+                ))
+            }
+        }
+
         post("/streams/{streamId}/terminate") {
             if (!authenticateModerationRequest(call)) {
                 call.respond(HttpStatusCode.Unauthorized, ModerationActionResponse(false, "Invalid moderation secret", ""))
@@ -133,9 +189,8 @@ fun Route.moderationRoutes(redisManager: RedisManager, streamSchema: StreamSchem
 
             try {
                 val request = call.receive<StreamTerminationRequest>()
-                val message = request.message ?: ModerationMessages.getTerminationMessage(request.reason)
+                val message = ModerationMessages.getTerminationMessage(request.reason)
 
-                // Resolve canonical roomId (prefer streamKey)
                 val roomId = resolveRoomIdParam(rawParam)
 
                 val terminationEvent = LiveEvent.StreamTerminatedEvent(
@@ -144,7 +199,6 @@ fun Route.moderationRoutes(redisManager: RedisManager, streamSchema: StreamSchem
                     message = message
                 )
 
-                // Add to Redis stream (consumer will broadcast)
                 redisManager.addToStream(terminationEvent)
 
                 // Update DB: mark terminated. If caller passed numeric id use it, otherwise look up stream by streamKey
@@ -205,13 +259,18 @@ fun Route.moderationRoutes(redisManager: RedisManager, streamSchema: StreamSchem
                 }
 
                 val sessionCount = SessionManager.getRoomSessions(roomId).size
+                val metadata = redisManager.getStreamMetadata(roomId)
+                val isAudioOnly = metadata["proxy_type"] == "audio_only"
+                val audioUrl = metadata["audio_url"]
 
                 call.respond(StreamStatusResponse(
                     streamId = roomId,
                     status = stream.status.dbValue,
                     sessionCount = sessionCount,
                     isLive = stream.status == StreamStatus.PUBLISHING,
-                    terminated = stream.status == StreamStatus.TERMINATED
+                    terminated = stream.status == StreamStatus.TERMINATED,
+                    isAudioOnly = isAudioOnly,
+                    audioUrl = audioUrl
                 ))
             } catch (e: Exception) {
                 application.log.error("Failed to get stream status for $rawParam", e)
@@ -222,37 +281,3 @@ fun Route.moderationRoutes(redisManager: RedisManager, streamSchema: StreamSchem
 }
 
 
-// Message templates for different moderation scenarios
-object ModerationMessages {
-    fun getWarningMessage(severity: ModerationSeverity, reason: ModerationReason): String {
-        return when (severity) {
-            ModerationSeverity.WARNING -> when (reason) {
-                ModerationReason.SEXUAL_CONTENT -> "Inappropriate content detected. Please adjust your stream content."
-                ModerationReason.VIOLENT_CONTENT -> "Violent content detected. Please adjust your stream content."
-                ModerationReason.MANUAL -> "Content policy violation detected. Please review community guidelines."
-                ModerationReason.OTHER -> "Content policy violation detected. Please review community guidelines."
-            }
-            ModerationSeverity.BLOCKED -> when (reason) {
-                ModerationReason.SEXUAL_CONTENT -> "Stream temporarily blocked due to sexual content violations."
-                ModerationReason.VIOLENT_CONTENT -> "Stream temporarily blocked due to violent content violations."
-                ModerationReason.MANUAL -> "Stream temporarily blocked due to content policy violations."
-                ModerationReason.OTHER -> "Stream temporarily blocked due to content policy violations."
-            }
-            ModerationSeverity.TERMINATED -> when (reason) {
-                ModerationReason.SEXUAL_CONTENT -> "Stream terminated for repeated sexual content violations."
-                ModerationReason.VIOLENT_CONTENT -> "Stream terminated for repeated violent content violations."
-                ModerationReason.MANUAL -> "Stream terminated by moderator."
-                ModerationReason.OTHER -> "Stream terminated for repeated content policy violations."
-            }
-        }
-    }
-
-    fun getTerminationMessage(reason: ModerationReason): String {
-        return when (reason) {
-            ModerationReason.SEXUAL_CONTENT -> "Stream terminated due to repeated sexual content violations."
-            ModerationReason.VIOLENT_CONTENT -> "Stream terminated due to repeated violent content violations."
-            ModerationReason.MANUAL -> "Stream terminated by moderator."
-            ModerationReason.OTHER -> "Stream terminated due to content policy violations."
-        }
-    }
-}

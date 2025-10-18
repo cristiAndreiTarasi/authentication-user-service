@@ -98,6 +98,18 @@ class RedisManager(redisUrl: String) {
         deleteHistory(roomId)
     }
 
+    fun setAudioState(roomId: String, audioUrl: String) {
+        // store proxy_type so status API can reveal audio-only
+        producerCommands.hset("stream:$roomId", mapOf("proxy_type" to "audio_only", "audio_url" to audioUrl))
+    }
+
+    fun clearAudioState(roomId: String) {
+        producerCommands.hdel("stream:$roomId", "proxy_type", "audio_url")
+    }
+
+    fun getStreamMetadata(roomId: String): Map<String, String> =
+        producerCommands.hgetall("stream:$roomId")
+
     fun close() {
         producerConnection.close()
         consumerConnection.close()

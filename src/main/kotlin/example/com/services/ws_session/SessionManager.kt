@@ -45,6 +45,10 @@ object SessionManager {
         return sessionToInfo[session]?.username
     }
 
+    fun getUserId(session: WebSocketSession): String? {
+        return sessionToInfo[session]?.userId
+    }
+
     fun getSession(roomId: String, userId: String): WebSocketSession? {
         return sessionToInfo.entries.firstOrNull {
             it.value.roomId == roomId && it.value.userId == userId
