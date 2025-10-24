@@ -73,7 +73,6 @@ fun Route.moderationRoutes(
         }
     }
 
-
     route("/internal/moderation") {
         fun authenticateModerationRequest(call: ApplicationCall): Boolean {
             val providedSecret = call.request.headers["X-Moderation-Secret"]
