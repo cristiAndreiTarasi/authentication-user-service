@@ -110,6 +110,15 @@ class RedisManager(redisUrl: String) {
     fun getStreamMetadata(roomId: String): Map<String, String> =
         producerCommands.hgetall("stream:$roomId")
 
+    fun getStreamModerationState(streamId: String): String? {
+        return try {
+            val metadata = getStreamMetadata(streamId)
+            metadata["state"]
+        } catch (e: Exception) {
+            null
+        }
+    }
+
     fun close() {
         producerConnection.close()
         consumerConnection.close()

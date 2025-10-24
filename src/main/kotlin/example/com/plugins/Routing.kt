@@ -2,6 +2,7 @@ package example.com.plugins
 
 import example.com.routes.authenticationRoutes
 import example.com.routes.categoryRoutes
+import example.com.routes.debugModerationRoutes
 import example.com.routes.eventRoutes
 import example.com.routes.moderationRoutes
 import example.com.routes.srsHttpHookRoutes
@@ -40,7 +41,8 @@ fun Application.configureRouting(
     httpClient: HttpClient,
     authTokenService: ITokenService,
     publishTokenService: ITokenService,
-    redisManager: RedisManager
+    redisManager: RedisManager,
+    moderationPublishSecret: String
 ) {
     routing {
         authenticationRoutes(userSchema, tokenSchema, hashingService, authTokenService)
@@ -49,7 +51,8 @@ fun Application.configureRouting(
         eventRoutes(eventSchema, gridFSService, userSchema, streamSchema)
         tagRoutes(tagSchema)
         categoryRoutes(categorySchema)
-        srsHttpHookRoutes(userSchema, publishTokenService, streamSchema, httpClient)
-        moderationRoutes(redisManager, streamSchema)
+        srsHttpHookRoutes(userSchema, publishTokenService, streamSchema, httpClient, redisManager, moderationPublishSecret)
+        moderationRoutes(redisManager, streamSchema, moderationPublishSecret)
+        debugModerationRoutes(moderationPublishSecret)
     }
 }

@@ -150,6 +150,7 @@ sealed class LiveEvent {
         val reason: String,
         val message: String,
         val terminatedBy: String = "moderation", // "moderation" or "streamer"
+        val origin: String? = null,
         override val initiatorId: String? = null,
         override val timestamp: Long? = null
     ) : LiveEvent()
@@ -162,6 +163,9 @@ sealed class LiveEvent {
         val reason: String, // "sexual_content" | "violent_content"
         val message: String,
         val terminateAt: Long? = null,
+        val warningUntil: Long? = null,
+        val blockUntil: Long? = null,
+        val origin: String? = null,
         override val initiatorId: String? = null,
         override val timestamp: Long? = null
     ) : LiveEvent()

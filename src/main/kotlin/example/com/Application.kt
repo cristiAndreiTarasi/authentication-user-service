@@ -74,6 +74,9 @@ fun Application.module() {
         secret = publishSecret
     )
 
+    //moderation
+    val moderationPublishSecret = environment.config.property("jwt.moderation.publishSecret").getString()
+
     val authTokenService = TokenService(authTokenConfig)
     val publishTokenService = TokenService(publishTokenConfig)
 
@@ -110,7 +113,7 @@ fun Application.module() {
         eventSchema, tagSchema, categorySchema,
         hashingService, dataSource, gridFsService,
         httpClient, authTokenService, publishTokenService,
-        redisManager
+        redisManager, moderationPublishSecret
     )
 
     val cleanupJob = launch {

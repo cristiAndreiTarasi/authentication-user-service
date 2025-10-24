@@ -1,5 +1,7 @@
 package example.com.routes
 
+import com.auth0.jwt.JWT
+import com.auth0.jwt.algorithms.Algorithm
 import example.com.LiveEventJson
 import example.com.ModerationMessages
 import example.com.ModerationReason
@@ -24,7 +26,10 @@ import kotlinx.serialization.Serializable
 data class ModerationWarningRequest(
     val severity: ModerationSeverity,
     val reason: ModerationReason,
-    val message: String? = null
+    val message: String? = null,
+    val terminateAt: Long? = null,
+    val warningUntil: Long? = null,
+    val blockUntil: Long? = null
 )
 
 @Serializable
@@ -46,12 +51,14 @@ data class StreamStatusResponse(
     val status: String,
     val sessionCount: Int,
     val isLive: Boolean,
-    val terminated: Boolean,
-    val isAudioOnly: Boolean,
-    val audioUrl: String?
+    val terminated: Boolean
 )
 
-fun Route.moderationRoutes(redisManager: RedisManager, streamSchema: StreamSchema) {
+fun Route.moderationRoutes(
+    redisManager: RedisManager,
+    streamSchema: StreamSchema,
+    moderationPublishSecret: String
+) {
     // Resolve a canonical room id (prefer streamKey). Accept either a streamKey or numeric streamId in the path.
     suspend fun resolveRoomIdParam(param: String): String {
         // if param looks like a UUID/string streamKey -> return as-is
@@ -68,11 +75,9 @@ fun Route.moderationRoutes(redisManager: RedisManager, streamSchema: StreamSchem
 
 
     route("/internal/moderation") {
-        val moderationSecret = System.getenv("MODERATION_SECRET") ?: "default_moderation_secret"
-
         fun authenticateModerationRequest(call: ApplicationCall): Boolean {
             val providedSecret = call.request.headers["X-Moderation-Secret"]
-            return providedSecret == moderationSecret
+            return providedSecret == moderationPublishSecret
         }
 
         post("/streams/{streamId}/warning") {
@@ -88,7 +93,8 @@ fun Route.moderationRoutes(redisManager: RedisManager, streamSchema: StreamSchem
 
             try {
                 val request = call.receive<ModerationWarningRequest>()
-                val message = ModerationMessages.getWarningMessage(request.severity, request.reason)
+                val defaultMessage = ModerationMessages.getWarningMessage(request.severity, request.reason)
+                val nowMs = System.currentTimeMillis()
 
                 val roomId = resolveRoomIdParam(rawParam)
 
@@ -96,15 +102,20 @@ fun Route.moderationRoutes(redisManager: RedisManager, streamSchema: StreamSchem
                     roomId = roomId,
                     severity = request.severity.name.lowercase(),
                     reason = request.reason.name.lowercase(),
-                    message = message
+                    message = defaultMessage,
+                    terminateAt = request.terminateAt,
+                    warningUntil = request.warningUntil,
+                    blockUntil = request.blockUntil,
+                    origin = "api-gateway",   // optional origin tag for dedupe
+                    timestamp = nowMs
                 )
 
                 redisManager.addToStream(warningEvent)
 
-                // Immediate dispatch to connected sessions (low-latency)
-                // Compose and send per-session messages (streamer gets different text)
-                val sessions = SessionManager.getRoomSessions(roomId)
+                // Immediate low-latency per-session dispatch using same timestamp
+                val sessions = SessionManager.getRoomSessions(roomId).toList()
                 val streamOwnerId = PermissionManager.getStreamOwner(roomId)
+                val liveEventPolymorphic = PolymorphicSerializer(LiveEvent::class)
 
                 sessions.forEach { session ->
                     try {
@@ -118,15 +129,11 @@ fun Route.moderationRoutes(redisManager: RedisManager, streamSchema: StreamSchem
                             ModerationMessages.getWarningMessage(request.severity, request.reason)
                         }
 
+                        // send a copy of the same event but with user-specific message
                         val userSpecificEvent = warningEvent.copy(message = finalMessage)
-                        val liveEventPolymorphic = PolymorphicSerializer(LiveEvent::class)
-
-                        // Attach terminateAt if provided by moderation controller/request
-                        val safeEvent = userSpecificEvent.withDefaults()
-                        val json = LiveEventJson.encodeToString(liveEventPolymorphic, safeEvent)
+                        val json = LiveEventJson.encodeToString(liveEventPolymorphic, userSpecificEvent.withDefaults())
                         session.send(Frame.Text(json))
                     } catch (e: Exception) {
-                        // Best-effort: ignore failures; remove session if dead
                         try { SessionManager.removeSession(session) } catch (_: Exception) {}
                     }
                 }
@@ -138,7 +145,6 @@ fun Route.moderationRoutes(redisManager: RedisManager, streamSchema: StreamSchem
                 ))
 
                 application.log.info("Moderation warning sent for stream $rawParam -> roomId=$roomId: ${request.severity} - ${request.reason}")
-
             } catch (e: Exception) {
                 application.log.error("Failed to send moderation warning for stream $rawParam", e)
                 call.respond(HttpStatusCode.InternalServerError, ModerationActionResponse(
@@ -268,9 +274,7 @@ fun Route.moderationRoutes(redisManager: RedisManager, streamSchema: StreamSchem
                     status = stream.status.dbValue,
                     sessionCount = sessionCount,
                     isLive = stream.status == StreamStatus.PUBLISHING,
-                    terminated = stream.status == StreamStatus.TERMINATED,
-                    isAudioOnly = isAudioOnly,
-                    audioUrl = audioUrl
+                    terminated = stream.status == StreamStatus.TERMINATED
                 ))
             } catch (e: Exception) {
                 application.log.error("Failed to get stream status for $rawParam", e)

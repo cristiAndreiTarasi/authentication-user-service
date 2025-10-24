@@ -1,13 +1,18 @@
 package example.com.routes
 
+import com.auth0.jwt.JWT
+import com.auth0.jwt.algorithms.Algorithm
 import example.com.routes.dtos.SrsHookPayload
 import example.com.schemas.StreamSchema
 import example.com.schemas.UserSchema
+import example.com.services.redis.RedisManager
 import example.com.services.token.ITokenService
 import example.com.services.token.TokenService
 import io.ktor.client.HttpClient
 import io.ktor.client.call.body
+import io.ktor.client.engine.cio.CIO
 import io.ktor.client.plugins.timeout
+import io.ktor.client.request.get
 import io.ktor.client.request.post
 import io.ktor.client.request.setBody
 import io.ktor.client.statement.bodyAsText
@@ -56,7 +61,9 @@ fun Route.srsHttpHookRoutes(
     userSchema: UserSchema,
     publishTokenService: ITokenService,
     streamSchema: StreamSchema,
-    httpClient: HttpClient
+    httpClient: HttpClient,
+    redisManager: RedisManager,
+    moderationPublishSecret: String
 ) {
     route("/api/v1/streams") {
         // single POST endpoint — origin will call this
@@ -67,7 +74,7 @@ fun Route.srsHttpHookRoutes(
             }
 
             val ok = try {
-                processSrsHook(call, payload, publishTokenService, streamSchema, userSchema, httpClient)
+                processSrsHook(call, payload, publishTokenService, streamSchema, userSchema, httpClient, redisManager, moderationPublishSecret)
             } catch (e: Exception) {
                 application.log.error("srsHttpHook: handler error", e)
                 false
@@ -85,12 +92,14 @@ private suspend fun processSrsHook(
     publishTokenService: ITokenService,
     streamSchema: StreamSchema,
     userSchema: UserSchema,
-    httpClient: HttpClient
+    httpClient: HttpClient,
+    redisManager: RedisManager,
+    moderationPublishSecret: String
 ): Boolean {
     val action = SrsHookAction.fromActionName(payload.action)
 
     return when (action) {
-        SrsHookAction.ON_PUBLISH -> handleOnPublish(call, payload, publishTokenService, streamSchema, userSchema, httpClient)
+        SrsHookAction.ON_PUBLISH -> handleOnPublish(call, payload, publishTokenService, streamSchema, userSchema, httpClient, redisManager, moderationPublishSecret)
         SrsHookAction.ON_UNPUBLISH -> handleOnUnpublish(call, payload, publishTokenService, streamSchema, userSchema)
         SrsHookAction.ON_PLAY -> handleOnPlay(call, payload)
         SrsHookAction.ON_STOP -> handleOnStop(call, payload)
@@ -174,7 +183,9 @@ private suspend fun handleOnPublish(
     publishTokenService: ITokenService,
     streamSchema: StreamSchema,
     userSchema: UserSchema,
-    httpClient: HttpClient
+    httpClient: HttpClient,
+    redisManager: RedisManager,
+    moderationPublishSecret: String
 ): Boolean {
     val log = call.application.log
     try {
@@ -185,6 +196,29 @@ private suspend fun handleOnPublish(
         if (token.isNullOrBlank()) {
             log.warn("on_publish: no token in param='$rawParam', denying.")
             return false
+        }
+
+        /// Check if this is a moderation token
+        val isModerationToken = isModerationToken(token)
+        if (isModerationToken) {
+            log.info("on_publish: accepting moderation stream for ${payload.stream}")
+
+            // For moderation streams, verify it's a valid moderation request
+            val isValidModeration = verifyModerationToken(token, payload.stream, moderationPublishSecret)
+            if (!isValidModeration) {
+                log.warn("on_publish: invalid moderation token for ${payload.stream}")
+                return false
+            }
+
+            // Check if stream exists and is in blocked state using Redis
+            val streamState = getStreamModerationState(payload.stream, redisManager)
+            if (streamState != "VIDEO_BLOCKED") {
+                log.warn("on_publish: moderation stream attempted for non-blocked stream ${payload.stream}. Current state: $streamState")
+                return false
+            }
+
+            log.info("on_publish: accepted moderation stream for blocked stream ${payload.stream}")
+            return true
         }
 
         val streamKeyFromToken = publishTokenService.getClaimFromToken(token, "streamKey")
@@ -296,6 +330,67 @@ private suspend fun handleOnPublish(
         call.application.log.error("on_publish: unexpected error", e)
         // Deny purposefully on unexpected error
         return false
+    }
+}
+
+private suspend fun getStreamModerationState(streamId: String, redisManager: RedisManager): String? {
+    return try {
+        // Get the stream state directly from Redis
+        // The moderation controller stores state in Redis at key "stream:${streamId}"
+        val redisKey = "stream:$streamId"
+
+        // Use your existing RedisManager to get the state
+        val metadata = redisManager.getStreamMetadata(streamId)
+        metadata["state"]
+    } catch (e: Exception) {
+        // Log the error but don't fail the entire request
+        println("Error getting stream moderation state from Redis for $streamId: ${e.message}")
+        null
+    }
+}
+
+private fun isModerationToken(token: String): Boolean {
+    // Better heuristic: check if token contains moderation-specific claims
+    return try {
+        // Try to decode without verification first to check structure
+        val decoded = JWT.decode(token)
+        val moderationClaim = decoded.getClaim("moderation")
+        moderationClaim != null && moderationClaim.asBoolean() == true
+    } catch (e: Exception) {
+        // If we can't decode, use length-based heuristic as fallback
+        token.length > 50
+    }
+}
+
+private fun verifyModerationToken(token: String, streamId: String, moderationPublishSecret: String): Boolean {
+    return try {
+        println("Verifying moderation token for stream: $streamId")
+        println("Token length: ${token.length}")
+        println("Using secret: ${moderationPublishSecret.take(10)}...") // Log first 10 chars for debugging
+
+        val claims = JWT.require(Algorithm.HMAC256(moderationPublishSecret))
+            .build()
+            .verify(token)
+
+        val tokenStreamId = claims.getClaim("streamKey").asString()
+        val isModeration = claims.getClaim("moderation").asBoolean()
+        val publicKey = claims.getClaim("publicKey").asString()
+
+        println("Token claims - streamKey: $tokenStreamId, moderation: $isModeration, publicKey: $publicKey")
+
+        val isValid = tokenStreamId == streamId && isModeration == true
+
+        if (!isValid) {
+            println("Token validation failed: streamId mismatch or not moderation token")
+            println("Expected streamId: $streamId, Got: $tokenStreamId")
+            println("Is moderation: $isModeration")
+        }
+
+        isValid
+    } catch (e: Exception) {
+        println("Token verification failed: ${e.message}")
+        e.printStackTrace()
+        false
     }
 }
 
@@ -433,6 +528,3 @@ fun cleanupOriginHls(payload: SrsHookPayload): Boolean {
 
     return true
 }
-
-
-//UPDATE users u SET is_live = false WHERE u.is_live = true AND NOT EXISTS (SELECT 1 FROM streams s WHERE s.user_id = u.id AND s.status = 'publishing');

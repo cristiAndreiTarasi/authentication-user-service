@@ -350,8 +350,12 @@ fun Application.configureSockets(
                         val sessionUserId = SessionManager.getUserId(session)
                         val isStreamer = sessionUserId == streamOwnerId
 
-                        val reason = try { ModerationReason.valueOf(event.reason.uppercase()) } catch (e: Exception) { ModerationReason.OTHER }
-                        val severity = try { ModerationSeverity.valueOf(event.severity.uppercase()) } catch (e: Exception) { ModerationSeverity.WARNING }
+                        val reason = try {
+                            ModerationReason.valueOf(event.reason.uppercase())
+                        } catch (e: Exception) { ModerationReason.OTHER }
+                        val severity = try {
+                            ModerationSeverity.valueOf(event.severity.uppercase())
+                        } catch (e: Exception) { ModerationSeverity.WARNING }
 
                         // For streamers, show streamer-specific messages
                         val finalMessage = if (isStreamer) {
