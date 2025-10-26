@@ -29,4 +29,27 @@ object UserQueries {
     const val SELECT_USER_FOLLOWERS = "SELECT follower_id FROM followers WHERE followed_id = ?"
     const val SELECT_USER_FOLLOWING = "SELECT followed_id FROM followers WHERE follower_id = ?"
     const val SELECT_LIVE_USERS = "SELECT * FROM users WHERE is_live = true"
+    const val SEARCH_USERS = """
+        SELECT u.id,
+               u.username,
+               u.occupation,
+               u.image_id,
+               EXISTS(
+                 SELECT 1 FROM followers f WHERE f.follower_id = ? AND f.followed_id = u.id
+               ) AS is_following,
+               (SELECT COUNT(*) FROM followers f2 WHERE f2.followed_id = u.id) AS follower_count,
+               u.is_live
+        FROM users u
+        WHERE (? = '' OR u.username ILIKE ? OR u.bio ILIKE ? OR u.occupation ILIKE ?)
+        ORDER BY similarity(u.username, ?) DESC NULLS LAST, u.created_at DESC
+        LIMIT ? OFFSET ?
+    """
+
+    const val FOLLOW_USER = """
+        INSERT INTO followers (follower_id, followed_id, created_at)
+        VALUES (?, ?, CURRENT_TIMESTAMP)
+        ON CONFLICT (follower_id, followed_id) DO NOTHING
+    """
+
+    const val UNFOLLOW_USER = "DELETE FROM followers WHERE follower_id = ? AND followed_id = ?"
 }

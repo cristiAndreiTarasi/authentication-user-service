@@ -8,9 +8,10 @@ import example.com.routes.dtos.UpdateOccupationDto
 import example.com.routes.dtos.UpdateUsernameDto
 import example.com.routes.dtos.UploadImageResponse
 import example.com.routes.dtos.UsernameResponse
-import example.com.schemas.TokenSchema
 import example.com.schemas.UserSchema
 import example.com.services.gridfs.GridFSService
+import example.com.services.redis.RedisService
+import example.com.services.token.ITokenService
 import io.ktor.http.ContentType
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.content.PartData
@@ -19,6 +20,8 @@ import io.ktor.http.content.streamProvider
 import io.ktor.server.application.call
 import io.ktor.server.application.log
 import io.ktor.server.auth.authenticate
+import io.ktor.server.auth.jwt.JWTPrincipal
+import io.ktor.server.auth.principal
 import io.ktor.server.request.receive
 import io.ktor.server.request.receiveMultipart
 import io.ktor.server.response.respond
@@ -32,15 +35,14 @@ import net.coobird.thumbnailator.Thumbnails
 import org.bson.types.ObjectId
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
-import java.sql.Connection
-import java.sql.SQLException
 import javax.sql.DataSource
 
 fun Route.userRoutes(
     userSchema: UserSchema,
-    tokenSchema: TokenSchema,
+    authTokenService: ITokenService,
     dataSource: DataSource,
-    gridFSService: GridFSService
+    gridFSService: GridFSService,
+    redisService: RedisService
 ) {
     authenticate("auth-jwt") {
         get("/users") {
@@ -48,6 +50,23 @@ fun Route.userRoutes(
             if (users.isNotEmpty()) {
                 call.respond(HttpStatusCode.OK, users)
             } else call.respond(HttpStatusCode.NotFound, "No users found")
+        }
+
+        get("/users/search") {
+            val q = call.request.queryParameters["q"]?.trim() ?: ""
+            val limit = call.request.queryParameters["limit"]?.toIntOrNull() ?: 20
+            val offset = call.request.queryParameters["offset"]?.toIntOrNull() ?: 0
+
+            val principal = call.principal<JWTPrincipal>()
+                ?: return@get call.respond(HttpStatusCode.Unauthorized)
+
+            // Prefer your tokenService.getClaim helper which returns string safely
+            val idStr = authTokenService.getClaim(principal, "userId") ?: authTokenService.getClaim(principal, "sub")
+            val currentUserId = idStr?.toIntOrNull()
+                ?: return@get call.respond(HttpStatusCode.Unauthorized)
+
+            val results = userSchema.searchUsers(q, limit, offset, currentUserId)
+            call.respond(HttpStatusCode.OK, results)
         }
 
         get("/users/{id}") {
@@ -228,6 +247,46 @@ fun Route.userRoutes(
 
             // success
             call.respond(HttpStatusCode.OK, "User deleted successfully")
+        }
+
+        post("/users/{targetId}/follow") {
+            val principal = call.principal<JWTPrincipal>() ?: return@post call.respond(HttpStatusCode.Unauthorized)
+            val idStr = authTokenService.getClaim(principal, "id") ?: authTokenService.getClaim(principal, "sub")
+            val currentUserId = idStr?.toIntOrNull() ?: return@post call.respond(HttpStatusCode.Unauthorized)
+
+            val targetId = call.parameters["targetId"]?.toIntOrNull() ?: return@post call.respond(HttpStatusCode.BadRequest)
+            if (currentUserId == targetId) return@post call.respond(HttpStatusCode.BadRequest, "Cannot follow yourself")
+
+            val ok = userSchema.followUser(currentUserId, targetId)
+            if (ok) {
+                try {
+                    redisService.addSocialEvent("follow", currentUserId, targetId)
+                } catch (e: Exception) {
+                    // log, but do not fail the request — DB is the source of truth
+                    call.application.environment.log.error("Failed to publish social event", e)
+                    // Optionally record an outbox row for retry (see below)
+                }
+                call.respond(HttpStatusCode.Created)
+            } else call.respond(HttpStatusCode.InternalServerError, "Failed to follow")
+        }
+
+        delete("/users/{targetId}/follow") {
+            val principal = call.principal<JWTPrincipal>() ?: return@delete call.respond(HttpStatusCode.Unauthorized)
+            val idStr = authTokenService.getClaim(principal, "id") ?: authTokenService.getClaim(principal, "sub")
+            val currentUserId = idStr?.toIntOrNull() ?: return@delete call.respond(HttpStatusCode.Unauthorized)
+
+            val targetId = call.parameters["targetId"]?.toIntOrNull() ?: return@delete call.respond(HttpStatusCode.BadRequest)
+            if (currentUserId == targetId) return@delete call.respond(HttpStatusCode.BadRequest, "Cannot unfollow yourself")
+
+            val ok = userSchema.unfollowUser(currentUserId, targetId)
+            if (ok) {
+                try {
+                    redisService.addSocialEvent("unfollow", currentUserId, targetId)
+                } catch (e: Exception) {
+                    call.application.environment.log.error("Failed to publish social event", e)
+                }
+                call.respond(HttpStatusCode.NoContent)
+            } else call.respond(HttpStatusCode.InternalServerError, "Failed to unfollow")
         }
 
         put("/users/update/{userId}/bio") {

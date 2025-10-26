@@ -5,19 +5,14 @@ import com.auth0.jwt.algorithms.Algorithm
 import example.com.routes.dtos.SrsHookPayload
 import example.com.schemas.StreamSchema
 import example.com.schemas.UserSchema
-import example.com.services.redis.RedisManager
+import example.com.services.redis.RedisService
 import example.com.services.token.ITokenService
-import example.com.services.token.TokenService
 import io.ktor.client.HttpClient
-import io.ktor.client.call.body
-import io.ktor.client.engine.cio.CIO
 import io.ktor.client.plugins.timeout
-import io.ktor.client.request.get
 import io.ktor.client.request.post
 import io.ktor.client.request.setBody
 import io.ktor.client.statement.bodyAsText
 import io.ktor.http.ContentType
-import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.contentType
 import io.ktor.server.application.ApplicationCall
@@ -26,9 +21,7 @@ import io.ktor.server.application.call
 import io.ktor.server.application.log
 import io.ktor.server.plugins.origin
 import io.ktor.server.request.receive
-import io.ktor.server.response.respond
 import io.ktor.server.response.respondBytes
-import io.ktor.server.response.respondText
 import io.ktor.server.routing.Route
 import io.ktor.server.routing.post
 import io.ktor.server.routing.route
@@ -36,10 +29,6 @@ import io.ktor.utils.io.errors.IOException
 import kotlinx.datetime.Clock
 import kotlinx.datetime.Instant
 import kotlinx.serialization.Serializable
-import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.boolean
-import kotlinx.serialization.json.jsonObject
-import kotlinx.serialization.json.jsonPrimitive
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.io.File
@@ -62,7 +51,7 @@ fun Route.srsHttpHookRoutes(
     publishTokenService: ITokenService,
     streamSchema: StreamSchema,
     httpClient: HttpClient,
-    redisManager: RedisManager,
+    redisService: RedisService,
     moderationPublishSecret: String
 ) {
     route("/api/v1/streams") {
@@ -74,7 +63,7 @@ fun Route.srsHttpHookRoutes(
             }
 
             val ok = try {
-                processSrsHook(call, payload, publishTokenService, streamSchema, userSchema, httpClient, redisManager, moderationPublishSecret)
+                processSrsHook(call, payload, publishTokenService, streamSchema, userSchema, httpClient, redisService, moderationPublishSecret)
             } catch (e: Exception) {
                 application.log.error("srsHttpHook: handler error", e)
                 false
@@ -93,7 +82,7 @@ private suspend fun processSrsHook(
     streamSchema: StreamSchema,
     userSchema: UserSchema,
     httpClient: HttpClient,
-    redisManager: RedisManager,
+    redisManager: RedisService,
     moderationPublishSecret: String
 ): Boolean {
     val action = SrsHookAction.fromActionName(payload.action)
@@ -184,7 +173,7 @@ private suspend fun handleOnPublish(
     streamSchema: StreamSchema,
     userSchema: UserSchema,
     httpClient: HttpClient,
-    redisManager: RedisManager,
+    redisManager: RedisService,
     moderationPublishSecret: String
 ): Boolean {
     val log = call.application.log
@@ -333,7 +322,7 @@ private suspend fun handleOnPublish(
     }
 }
 
-private suspend fun getStreamModerationState(streamId: String, redisManager: RedisManager): String? {
+private suspend fun getStreamModerationState(streamId: String, redisManager: RedisService): String? {
     return try {
         // Get the stream state directly from Redis
         // The moderation controller stores state in Redis at key "stream:${streamId}"

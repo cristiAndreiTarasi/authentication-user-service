@@ -7,15 +7,19 @@ import example.com.ModerationSeverity
 import example.com.routes.dtos.LiveEvent
 import example.com.routes.dtos.withDefaults
 import example.com.schemas.UserSchema
-import example.com.services.redis.RedisManager
+import example.com.services.notifications.NotificationSessionRegistry
+import example.com.services.redis.RedisService
 import example.com.services.token.TokenService
 import example.com.services.ws_session.PermissionManager
 import example.com.services.ws_session.SessionManager
-import io.ktor.http.HttpStatusCode
 import io.ktor.server.application.Application
+import io.ktor.server.application.ApplicationCall
 import io.ktor.server.application.install
-import io.ktor.server.response.respond
+import io.ktor.server.auth.authenticate
+import io.ktor.server.auth.jwt.JWTPrincipal
+import io.ktor.server.auth.principal
 import io.ktor.server.routing.routing
+import io.ktor.server.websocket.DefaultWebSocketServerSession
 import io.ktor.server.websocket.WebSockets
 import io.ktor.server.websocket.pingPeriod
 import io.ktor.server.websocket.timeout
@@ -27,14 +31,12 @@ import io.ktor.websocket.close
 import io.ktor.websocket.readText
 import kotlinx.coroutines.delay
 import kotlinx.serialization.PolymorphicSerializer
-import kotlinx.serialization.encodeToString
-import kotlinx.serialization.json.Json
 import java.time.Duration
 
 fun Application.configureSockets(
-    redisManager: RedisManager,
+    redisService: RedisService,
     userSchema: UserSchema,
-    tokenService: TokenService
+    authTokenService: TokenService
 ) {
     install(WebSockets) {
         pingPeriod   = Duration.ofSeconds(15)
@@ -45,7 +47,7 @@ fun Application.configureSockets(
 
     val liveEventPolymorphic = PolymorphicSerializer(LiveEvent::class)
 
-    fun updateStreamStats(roomId: String, redisManager: RedisManager) {
+    fun updateStreamStats(roomId: String, redisManager: RedisService) {
         val viewerCount = SessionManager.getRoomSessions(roomId).size
         val totalLikes = redisManager.getCounter("room:$roomId:likes") ?: 0
 
@@ -80,11 +82,11 @@ fun Application.configureSockets(
                 // Connection already closed
             } finally {
                 SessionManager.removeSession(session)
-                updateStreamStats(roomId, redisManager)
+                updateStreamStats(roomId, redisService)
             }
         }
 
-        redisManager.addToStream(
+        redisService.addToStream(
             LiveEvent.SystemMessage(
                 roomId = roomId,
                 text = "$username was kicked from the stream",
@@ -123,13 +125,13 @@ fun Application.configureSockets(
 
     fun sendStreamEndedEvent(roomId: String) {
         val event = LiveEvent.StreamEndedEvent(roomId = roomId)
-        redisManager.addToStream(event)
+        redisService.addToStream(event)
     }
 
     suspend fun sendInitialState(
         roomId: String,
         session: WebSocketSession,
-        redisManager: RedisManager
+        redisManager: RedisService
     ) {
         val viewerCount = SessionManager.getRoomSessions(roomId).size
         val totalLikes = redisManager.getCounter("room:$roomId:likes") ?: 0
@@ -142,13 +144,6 @@ fun Application.configureSockets(
 
         val json = LiveEventJson.encodeToString(liveEventPolymorphic, streamStatsEvent.withDefaults())
         session.send(Frame.Text(json))
-
-        /*val metadata = redisManager.getStreamMetadata(roomId)
-        if (metadata["proxy_type"] == "audio_only") {
-            val audioEvt = metadata["audio_url"]?.let { LiveEvent.ModerationBlockAudioEvent(roomId = roomId, audioUrl = it, reason = "moderation", message = "This stream is audio-only") }
-            val audioOnlyJson = audioEvt?.let { LiveEventJson.encodeToString(liveEventPolymorphic, it.withDefaults()) }
-            session.send(Frame.Text(audioOnlyJson!!))
-        }*/
     }
 
     suspend fun broadcastStreamOwnerInfo(
@@ -190,7 +185,7 @@ fun Application.configureSockets(
     suspend fun sendSystemMessage(
         roomId: String,
         text: String,
-        redisManager: RedisManager
+        redisManager: RedisService
     ) {
         val event = LiveEvent.SystemMessage(
             roomId = roomId,
@@ -204,7 +199,7 @@ fun Application.configureSockets(
         event: LiveEvent,
         userId: String,
         roomId: String,
-        redisManager: RedisManager
+        redisManager: RedisService
     ) {
         // Ignore any client events if the user is kicked.
         if (PermissionManager.isKicked(roomId, userId) && event.initiatorId != "system") {
@@ -466,13 +461,6 @@ fun Application.configureSockets(
                     }
                 }
 
-                // Optionally persist audio-only state in Redis for status API (see RedisManager helper below)
-                try {
-                    redisManager.setAudioState(roomId, event.audioUrl)
-                } catch (e: Exception) {
-                    println("Failed to persist audio state for $roomId: ${e.message}")
-                }
-
                 // Also add the event back to stream history if you want clients who connect later to see it:
                 redisManager.addToHistory(roomId, event)
             }
@@ -480,7 +468,7 @@ fun Application.configureSockets(
     }
 
     routing {
-        webSocket("/ws/{roomId}/{userId}") {
+        webSocket("/liveRoom/{roomId}/{userId}") {
             val roomId = call.parameters["roomId"]!!
             val userId = call.parameters["userId"]!!
             val user = userSchema.findById(userId.toInt())
@@ -508,14 +496,14 @@ fun Application.configureSockets(
 
             try {
                 // Send chat history first
-                val history = redisManager.getRoomHistory(roomId)
+                val history = redisService.getRoomHistory(roomId)
                 history.forEach { event ->
                     val json = LiveEventJson.encodeToString(liveEventPolymorphic, event.withDefaults())
                     send(Frame.Text(json))
                 }
 
                 // Send initial state
-                sendInitialState(roomId, this, redisManager)
+                sendInitialState(roomId, this, redisService)
 
                 // Send stream owner info if available
                 sendStreamOwnerInfo(roomId, this, userSchema)
@@ -527,7 +515,7 @@ fun Application.configureSockets(
                     username = username,
                     timestamp = System.currentTimeMillis()
                 )
-                handleEvent(joinEvent, userId, roomId, redisManager)
+                handleEvent(joinEvent, userId, roomId, redisService)
 
                 // Listen for incoming messages
                 for (frame in incoming) {
@@ -535,7 +523,7 @@ fun Application.configureSockets(
                         is Frame.Text -> {
                             // Use LiveEventJson for decoding
                             val event = LiveEventJson.decodeFromString<LiveEvent>(frame.readText())
-                            handleEvent(event, userId, roomId, redisManager)
+                            handleEvent(event, userId, roomId, redisService)
                         }
                         else -> {}
                     }
@@ -554,13 +542,13 @@ fun Application.configureSockets(
                     ),
                     userId,
                     roomId,
-                    redisManager
+                    redisService
                 )
 
                 // Check if stream owner is leaving
                 if (PermissionManager.isStreamOwner(roomId, userId)) {
                     val endEvent = LiveEvent.StreamEndedEvent(roomId = roomId)
-                    redisManager.addToStream(endEvent)
+                    redisService.addToStream(endEvent)
 
                     delay(200L)
 
@@ -576,14 +564,45 @@ fun Application.configureSockets(
 
                     // Clean up room state
                     PermissionManager.removeRoom(roomId)
-                    redisManager.deleteCounters(roomId)
+                    redisService.deleteCounters(roomId)
                 } else {
                     // Only clean up if room is empty
                     if (SessionManager.getRoomSessions(roomId).isEmpty()) {
                         PermissionManager.removeRoom(roomId)
-                        redisManager.deleteCounters(roomId)
+                        redisService.deleteCounters(roomId)
                         sendStreamEndedEvent(roomId)
                     }
+                }
+            }
+        }
+
+        authenticate("auth-jwt") {
+            webSocket("/notifications") {
+                val principal = call.principal<JWTPrincipal>() ?: run {
+                    close(CloseReason(CloseReason.Codes.VIOLATED_POLICY, "Unauthenticated"))
+                    return@webSocket
+                }
+
+                val idStr = authTokenService.getClaim(principal, "id") ?: authTokenService.getClaim(principal, "sub")
+                val userId = idStr?.toIntOrNull() ?: run {
+                    close(CloseReason(CloseReason.Codes.VIOLATED_POLICY, "Invalid user id"))
+                    return@webSocket
+                }
+
+                // Register session
+                NotificationSessionRegistry.register(userId, this)
+
+                try {
+                    for (frame in incoming) {
+                        when (frame) {
+                            is Frame.Text -> {
+                                // optional messages from client e.g. ack / ping
+                            }
+                            else -> {}
+                        }
+                    }
+                } finally {
+                    NotificationSessionRegistry.unregister(userId)
                 }
             }
         }

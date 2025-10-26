@@ -10,13 +10,15 @@ import example.com.plugins.configureSockets
 import example.com.plugins.createPostgresDataSource
 import example.com.schemas.CategorySchema
 import example.com.schemas.EventSchema
+import example.com.schemas.NotificationSchema
 import example.com.schemas.StreamSchema
 import example.com.schemas.TagSchema
 import example.com.schemas.TokenSchema
 import example.com.schemas.UserSchema
 import example.com.services.gridfs.GridFSService
 import example.com.services.hashing.HashingService
-import example.com.services.redis.RedisManager
+import example.com.services.notifications.NotificationWorker
+import example.com.services.redis.RedisService
 import example.com.services.role.RoleService
 import example.com.services.token.TokenConfig
 import example.com.services.token.TokenService
@@ -74,6 +76,10 @@ fun Application.module() {
         secret = publishSecret
     )
 
+    val host = environment.config.property("db.redis.host").getString()
+    val port = environment.config.property("db.redis.port").getString()
+    val redisService = RedisService("redis://$host:$port")
+
     //moderation
     val moderationPublishSecret = environment.config.property("jwt.moderation.publishSecret").getString()
 
@@ -90,30 +96,30 @@ fun Application.module() {
     val streamSchema = StreamSchema(dataSource, categorySchema, tagSchema, gridFsService)
     val eventSchema = EventSchema(dataSource, categorySchema, tagSchema)
 
-    val host = environment.config.property("db.redis.host").getString()
-    val port = environment.config.property("db.redis.port").getString()
+    val notificationSchema = NotificationSchema(dataSource)
+    val notificationWorker = NotificationWorker(redisService, notificationSchema)
 
-    val redisManager = RedisManager("redis://$host:$port")
-
-    // Start Redis consumer in background
     launch {
-        redisManager.consumeEvents("live-group")
+        // Start Redis consumer in background
+        redisService.consumeEvents("live-group")
+        // Start notification worker in background
+        notificationWorker.run()
     }
 
+    configureSecurity(authTokenConfig)
     configureSerialization(appJson)
     configureHTTP()
     configureSockets(
-        redisManager,
+        redisService,
         userSchema,
         authTokenService,
     )
-    configureSecurity(authTokenConfig)
     configureRouting(
         userSchema, tokenSchema, streamSchema,
         eventSchema, tagSchema, categorySchema,
         hashingService, dataSource, gridFsService,
         httpClient, authTokenService, publishTokenService,
-        redisManager, moderationPublishSecret
+        redisService, moderationPublishSecret, notificationSchema
     )
 
     val cleanupJob = launch {
@@ -129,7 +135,7 @@ fun Application.module() {
     // Graceful shutdown handling
     environment.monitor.subscribe(ApplicationStopping) {
         cleanupJob.cancel() // Stop job when server stops
-        redisManager.close()
+        redisService.close()
         httpClient.close()
 
         // Close Hikari if we have it

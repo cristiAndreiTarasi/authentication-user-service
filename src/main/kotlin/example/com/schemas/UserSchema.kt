@@ -3,7 +3,9 @@ package example.com.schemas
 import example.com.config.LocalDateSerializer
 import example.com.config.ObjectIdSerializer
 import example.com.schemas.queries.UserQueries.DELETE_USER_BY_ID
+import example.com.schemas.queries.UserQueries.FOLLOW_USER
 import example.com.schemas.queries.UserQueries.INSERT_USER
+import example.com.schemas.queries.UserQueries.SEARCH_USERS
 import example.com.schemas.queries.UserQueries.SELECT_ALL_USERS
 import example.com.schemas.queries.UserQueries.SELECT_LIVE_USERS
 import example.com.schemas.queries.UserQueries.SELECT_USER_BY_EMAIL
@@ -13,6 +15,7 @@ import example.com.schemas.queries.UserQueries.SELECT_USER_BY_USERNAME
 import example.com.schemas.queries.UserQueries.SELECT_USER_FOLLOWERS
 import example.com.schemas.queries.UserQueries.SELECT_USER_FOLLOWING
 import example.com.schemas.queries.UserQueries.SELECT_USER_LIKES
+import example.com.schemas.queries.UserQueries.UNFOLLOW_USER
 import example.com.schemas.queries.UserQueries.UPDATE_PASSWORD_RESET_TOKEN
 import example.com.schemas.queries.UserQueries.UPDATE_USER_BIO
 import example.com.schemas.queries.UserQueries.UPDATE_USER_IMAGE_ID
@@ -56,6 +59,17 @@ data class ExposedUser(
 data class TallyDto(
     val tally: Int,
     val userIds: List<Int>
+)
+
+@Serializable
+data class UserSearchDto(
+    val id: Int,
+    val username: String,
+    val occupation: String? = null,
+    val profileImagePath: String? = null,
+    val isFollowing: Boolean,
+    val followerCount: Int = 0,
+    val isLive: Boolean = false
 )
 
 class UserSchema(
@@ -310,6 +324,61 @@ class UserSchema(
                 }
                 TallyDto(tally = followingIds.size, userIds = followingIds)
             }
+        }
+    }
+
+    suspend fun searchUsers(
+        query: String,
+        limit: Int,
+        offset: Int,
+        currentUserId: Int
+    ): List<UserSearchDto> = dbQuery { conn ->
+        val qRaw = query.trim()
+        val qPattern = "%${qRaw}%"
+        conn.prepareStatement(SEARCH_USERS).use { stmt ->
+            stmt.setInt(1, currentUserId)   // EXISTS ... f.follower_id = ?
+            stmt.setString(2, qRaw)         // (? = '' OR ...)
+            stmt.setString(3, qPattern)     // u.username ILIKE ?
+            stmt.setString(4, qPattern)     // u.bio ILIKE ?
+            stmt.setString(5, qPattern)     // u.occupation ILIKE ?
+            stmt.setString(6, qRaw)         // similarity(u.username, ?)
+            stmt.setInt(7, limit)           // LIMIT ?
+            stmt.setInt(8, offset)          // OFFSET ?
+
+            stmt.executeQuery().use { rs ->
+                val out = mutableListOf<UserSearchDto>()
+                while (rs.next()) {
+                    val id = rs.getInt("id")
+                    val imageId = rs.getString("image_id")
+                    val profileImagePath = imageId?.let { "/users/fetch/$id/avatar" }
+                    out.add(UserSearchDto(
+                        id = id,
+                        username = rs.getString("username"),
+                        occupation = rs.getString("occupation"),
+                        profileImagePath = profileImagePath,
+                        isFollowing = rs.getBoolean("is_following"),
+                        followerCount = rs.getInt("follower_count"),
+                        isLive = rs.getBoolean("is_live")
+                    ))
+                }
+                out
+            }
+        }
+    }
+
+    suspend fun followUser(followerId: Int, followedId: Int): Boolean = dbQuery { conn ->
+        conn.prepareStatement(FOLLOW_USER).use { stmt ->
+            stmt.setInt(1, followerId)
+            stmt.setInt(2, followedId)
+            stmt.executeUpdate() >= 0
+        }
+    }
+
+    suspend fun unfollowUser(followerId: Int, followedId: Int): Boolean = dbQuery { conn ->
+        conn.prepareStatement(UNFOLLOW_USER).use { stmt ->
+            stmt.setInt(1, followerId)
+            stmt.setInt(2, followedId)
+            stmt.executeUpdate() >= 0
         }
     }
 

@@ -1,7 +1,5 @@
 package example.com.routes
 
-import com.auth0.jwt.JWT
-import com.auth0.jwt.algorithms.Algorithm
 import example.com.LiveEventJson
 import example.com.ModerationMessages
 import example.com.ModerationReason
@@ -10,7 +8,7 @@ import example.com.StreamStatus
 import example.com.routes.dtos.LiveEvent
 import example.com.routes.dtos.withDefaults
 import example.com.schemas.StreamSchema
-import example.com.services.redis.RedisManager
+import example.com.services.redis.RedisService
 import example.com.services.ws_session.PermissionManager
 import example.com.services.ws_session.SessionManager
 import io.ktor.http.HttpStatusCode
@@ -55,7 +53,7 @@ data class StreamStatusResponse(
 )
 
 fun Route.moderationRoutes(
-    redisManager: RedisManager,
+    redisManager: RedisService,
     streamSchema: StreamSchema,
     moderationPublishSecret: String
 ) {
