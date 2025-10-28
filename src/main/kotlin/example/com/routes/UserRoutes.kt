@@ -251,7 +251,7 @@ fun Route.userRoutes(
 
         post("/users/{targetId}/follow") {
             val principal = call.principal<JWTPrincipal>() ?: return@post call.respond(HttpStatusCode.Unauthorized)
-            val idStr = authTokenService.getClaim(principal, "id") ?: authTokenService.getClaim(principal, "sub")
+            val idStr = authTokenService.getClaim(principal, "userId") ?: authTokenService.getClaim(principal, "sub")
             val currentUserId = idStr?.toIntOrNull() ?: return@post call.respond(HttpStatusCode.Unauthorized)
 
             val targetId = call.parameters["targetId"]?.toIntOrNull() ?: return@post call.respond(HttpStatusCode.BadRequest)
@@ -272,7 +272,7 @@ fun Route.userRoutes(
 
         delete("/users/{targetId}/follow") {
             val principal = call.principal<JWTPrincipal>() ?: return@delete call.respond(HttpStatusCode.Unauthorized)
-            val idStr = authTokenService.getClaim(principal, "id") ?: authTokenService.getClaim(principal, "sub")
+            val idStr = authTokenService.getClaim(principal, "userId") ?: authTokenService.getClaim(principal, "sub")
             val currentUserId = idStr?.toIntOrNull() ?: return@delete call.respond(HttpStatusCode.Unauthorized)
 
             val targetId = call.parameters["targetId"]?.toIntOrNull() ?: return@delete call.respond(HttpStatusCode.BadRequest)
