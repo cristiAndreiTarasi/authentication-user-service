@@ -1,6 +1,12 @@
 package example.com.services.notifications
 
+import example.com.NotificationEventJson
+import example.com.ProfileUpdateType
+import example.com.SocialEventType
+import example.com.routes.dtos.NotificationEvent
+import example.com.routes.dtos.withDefaults
 import example.com.schemas.NotificationSchema
+import example.com.schemas.UserSchema
 import example.com.services.redis.SocialEvent
 import example.com.services.redis.RedisService
 import io.lettuce.core.Consumer
@@ -16,30 +22,29 @@ import kotlinx.serialization.json.Json
 class NotificationWorker(
     private val redisService: RedisService,
     private val notificationSchema: NotificationSchema,
+    private val userSchema: UserSchema,
     private val consumerGroup: String = "notifications-group",
     private val consumerId: String = "notif-consumer-${System.getenv("HOSTNAME") ?: "local"}",
-    private val streamKey: String = "streams:social:events" // keep consistent with RedisService producer
+    private val streamKey: String = "social_events"
 ) {
     private val json = Json { ignoreUnknownKeys = true }
 
     suspend fun run() {
+        println("DEBUG: NotificationWorker starting...")
+
         // Create consumer group if not exists
         try {
-            redisService.consumerCommands.xgroupCreate(
-                XReadArgs.StreamOffset.from(streamKey, "0-0"),
-                consumerGroup,
-                XGroupCreateArgs.Builder.mkstream(true)
-            )
-        } catch (e: RedisCommandExecutionException) {
-            if (!e.message.orEmpty().contains("BUSYGROUP")) throw e
-        } catch (_: Throwable) {}
+            redisService.createConsumerGroupIfNotExists(streamKey, consumerGroup)
+        } catch (e: Exception) {
+            println("DEBUG: Error creating consumer group: ${e.message}")
+        }
 
         while (true) {
             try {
                 val messages: List<StreamMessage<String, String>> =
                     redisService.consumerCommands.xreadgroup(
                         Consumer.from(consumerGroup, consumerId),
-                        XReadArgs.Builder.block(5_000).count(100),
+                        XReadArgs.Builder.block(5000).count(100),
                         XReadArgs.StreamOffset.from(streamKey, ">")
                     )
 
@@ -47,6 +52,8 @@ class NotificationWorker(
                     delay(100)
                     continue
                 }
+
+                println("DEBUG: NotificationWorker processing ${messages.size} messages")
 
                 for (msg in messages) {
                     val raw = msg.body["event"]
@@ -56,65 +63,113 @@ class NotificationWorker(
                     }
 
                     try {
-                        val event = json.decodeFromString(SocialEvent.serializer(), raw)
-
-                        when (event.type.lowercase()) {
-                            "follow" -> {
-                                val actorIdInt = event.actorId.toIntOrNull()
-                                val targetIdInt = event.targetId.toIntOrNull()
-                                val actorName = event.actorUsername ?: "Someone"
-                                val text = "$actorName followed you"
-
-                                val payload = json.encodeToString(
-                                    mapOf(
-                                        "type" to "notification",
-                                        "subtype" to "follow",
-                                        "text" to text,
-                                        "actorId" to event.actorId,
-                                        "actorUsername" to event.actorUsername,
-                                        "ts" to event.ts
-                                    )
-                                )
-
-                                // Try real-time delivery
-                                val delivered = NotificationSessionRegistry.sendToUser(targetIdInt ?: -1, payload)
-
-                                // If not delivered, persist
-                                if (!delivered && targetIdInt != null) {
-                                    notificationSchema.insertNotification(
-                                        userId = targetIdInt,
-                                        actorId = actorIdInt,
-                                        type = "follow",
-                                        text = text,
-                                        metaJson = """{"actorUsername":"${event.actorUsername ?: ""}"}"""
-                                    )
-                                }
-                            }
-
-                            "unfollow" -> {
-                                // Optional: notify or ignore; implement similarly if needed
-                            }
-
-                            else -> {
-                                // handle other social events similarly if desired
-                            }
-                        }
-
-                        // ACK on success
-                        redisService.consumerCommands.xack(streamKey, consumerGroup, msg.id)
-                    } catch (e: Throwable) {
-                        // Parsing / send error: do NOT ack so it can be retried
-                        println("NotificationWorker: error handling message id=${msg.id}: ${e.message}")
+                        val socialEvent = json.decodeFromString(SocialEvent.serializer(), raw)
+                        handleSocialEvent(socialEvent, msg.id)
+                    } catch (e: Exception) {
+                        println("DEBUG: Error processing message ${msg.id}: ${e.message}")
                     }
                 }
-            } catch (e: RedisException) {
-                // Redis connectivity issue -> backoff
-                delay(1_000)
-            } catch (e: Throwable) {
-                // Unexpected -> avoid tight loop
-                println("NotificationWorker unexpected error: ${e.message}")
-                delay(1_000)
+            } catch (e: Exception) {
+                println("DEBUG: NotificationWorker error: ${e.message}")
+                delay(1000)
             }
         }
+    }
+
+    private suspend fun handleFollowEvent(
+        event: SocialEvent,
+        actorIdInt: Int,
+        targetIdInt: Int,
+        messageId: String
+    ) {
+        println("🔔 DEBUG: Processing follow event - actor: $actorIdInt, target: $targetIdInt")
+
+        val actorName = event.actorUsername ?: "Someone"
+        val text = "$actorName followed you"
+
+        // 1. Send Follow NotificationEvent via WebSocket
+        val followEvent = NotificationEvent.Follow(
+            userId = targetIdInt.toString(),
+            actorId = event.actorId,
+            actorUsername = event.actorUsername,
+            text = text
+        ).withDefaults()
+
+        val eventJson = NotificationEventJson.encodeToString(followEvent)
+        val delivered = NotificationSessionRegistry.sendToUser(targetIdInt, eventJson)
+        println("DEBUG: WebSocket Follow event delivery to user $targetIdInt: $delivered")
+
+        // 2. Store in database (for offline users)
+        if (!delivered) {
+            val stored = notificationSchema.insertNotification(
+                userId = targetIdInt,
+                actorId = actorIdInt,
+                type = "follow",
+                text = text,
+                metaJson = """{"actorUsername":"${event.actorUsername ?: ""}"}"""
+            )
+            println("DEBUG: Database storage for user $targetIdInt: $stored")
+        }
+
+        // 3. Send ProfileUpdate events using enum
+        sendProfileUpdate(targetIdInt, ProfileUpdateType.FOLLOWERS)
+        sendProfileUpdate(actorIdInt, ProfileUpdateType.FOLLOWING)
+
+        redisService.consumerCommands.xack(streamKey, consumerGroup, messageId)
+        println("DEBUG: Processed follow event for target user $targetIdInt")
+    }
+
+    private suspend fun handleUnfollowEvent(
+        event: SocialEvent,
+        actorIdInt: Int,
+        targetIdInt: Int,
+        messageId: String
+    ) {
+        // Send profile updates for unfollow
+        sendProfileUpdate(targetIdInt, ProfileUpdateType.FOLLOWERS)
+        sendProfileUpdate(actorIdInt, ProfileUpdateType.FOLLOWING)
+        println("DEBUG: Processed unfollow event: actor=$actorIdInt, target=$targetIdInt")
+
+        redisService.consumerCommands.xack(streamKey, consumerGroup, messageId)
+    }
+
+    private suspend fun sendProfileUpdate(userId: Int, updateType: ProfileUpdateType) {
+        // Get current count from database using type-safe when
+        val count = when (updateType) {
+            ProfileUpdateType.FOLLOWERS -> userSchema.getUserFollowers(userId).tally
+            ProfileUpdateType.FOLLOWING -> userSchema.getUserFollowing(userId).tally
+            ProfileUpdateType.UNREAD_COUNT -> notificationSchema.getUnreadCount(userId)
+        }
+
+        val profileEvent = NotificationEvent.ProfileUpdate(
+            userId = userId.toString(),
+            updateType = updateType.name, // Use enum name for consistency
+            count = count
+        ).withDefaults()
+
+        val eventJson = NotificationEventJson.encodeToString(profileEvent)
+        val sent = NotificationSessionRegistry.sendToUser(userId, eventJson)
+        if (sent) {
+            println("DEBUG: Sent profile update to user $userId: $updateType = $count")
+        }
+    }
+
+    private suspend fun handleSocialEvent(event: SocialEvent, messageId: String) {
+        val actorIdInt = event.actorId.toIntOrNull()
+        val targetIdInt = event.targetId.toIntOrNull()
+
+        if (actorIdInt == null || targetIdInt == null) {
+            println("DEBUG: Invalid IDs in social event")
+            redisService.consumerCommands.xack(streamKey, consumerGroup, messageId)
+            return
+        }
+
+        when (event.type) {
+            SocialEventType.FOLLOW -> handleFollowEvent(event, actorIdInt, targetIdInt, messageId)
+            SocialEventType.UNFOLLOW -> handleUnfollowEvent(event, actorIdInt, targetIdInt, messageId)
+            SocialEventType.BLOCK -> {}
+        }
+
+        redisService.consumerCommands.xack(streamKey, consumerGroup, messageId)
     }
 }

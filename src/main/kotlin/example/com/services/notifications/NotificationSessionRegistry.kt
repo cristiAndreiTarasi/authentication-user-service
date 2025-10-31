@@ -18,22 +18,16 @@ object NotificationSessionRegistry {
     fun unregister(userId: Int) = sessions.remove(userId)
     fun hasSession(userId: Int): Boolean = sessions.containsKey(userId)
 
-    /**
-     * Attempts to send a payload to the user's websocket session.
-     * Returns true if the session existed and send succeeded, false otherwise.
-     */
-    fun sendToUser(userId: Int, payloadJson: String): Boolean {
+    suspend fun sendToUser(userId: Int, payloadJson: String): Boolean {
         val session = sessions[userId] ?: return false
         return try {
-            // send is suspend; use runBlocking for callers that are not suspending
-            runBlocking {
-                session.send(Frame.Text(payloadJson))
-            }
+            session.send(Frame.Text(payloadJson))
             true
         } catch (e: Throwable) {
-            // If send fails, remove session and return false so worker can persist.
             sessions.remove(userId)
             false
         }
     }
+
+    fun getConnectedUsers(): Set<Int> = sessions.keys.toSet()
 }

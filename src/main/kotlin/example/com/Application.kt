@@ -97,14 +97,21 @@ fun Application.module() {
     val eventSchema = EventSchema(dataSource, categorySchema, tagSchema)
 
     val notificationSchema = NotificationSchema(dataSource)
-    val notificationWorker = NotificationWorker(redisService, notificationSchema)
+    val notificationWorker = NotificationWorker(redisService, notificationSchema, userSchema)
 
     launch {
         // Start Redis consumer in background
+        println("🚀 Starting Redis consumeEvents worker...")
         redisService.consumeEvents("live-group")
+    }
+
+    launch {
         // Start notification worker in background
+        println("🚀 Starting NotificationWorker...")
         notificationWorker.run()
     }
+
+    println("✅ Both background workers started successfully")
 
     configureSecurity(authTokenConfig)
     configureSerialization(appJson)
@@ -112,6 +119,7 @@ fun Application.module() {
     configureSockets(
         redisService,
         userSchema,
+        notificationSchema,
         authTokenService,
     )
     configureRouting(

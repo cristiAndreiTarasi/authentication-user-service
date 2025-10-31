@@ -1,6 +1,7 @@
 // UserRoutes.kt
 package example.com.routes
 
+import example.com.SocialEventType
 import example.com.routes.dtos.LiveUserDto
 import example.com.routes.dtos.ProfileFieldUpdateResponse
 import example.com.routes.dtos.UpdateBioDto
@@ -260,7 +261,7 @@ fun Route.userRoutes(
             val ok = userSchema.followUser(currentUserId, targetId)
             if (ok) {
                 try {
-                    redisService.addSocialEvent("follow", currentUserId, targetId)
+                    redisService.addSocialEvent(SocialEventType.FOLLOW, currentUserId, targetId)
                 } catch (e: Exception) {
                     // log, but do not fail the request — DB is the source of truth
                     call.application.environment.log.error("Failed to publish social event", e)
@@ -281,7 +282,7 @@ fun Route.userRoutes(
             val ok = userSchema.unfollowUser(currentUserId, targetId)
             if (ok) {
                 try {
-                    redisService.addSocialEvent("unfollow", currentUserId, targetId)
+                    redisService.addSocialEvent(SocialEventType.UNFOLLOW, currentUserId, targetId)
                 } catch (e: Exception) {
                     call.application.environment.log.error("Failed to publish social event", e)
                 }

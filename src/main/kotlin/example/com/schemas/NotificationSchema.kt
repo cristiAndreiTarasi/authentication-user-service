@@ -1,5 +1,6 @@
 package example.com.schemas
 
+import example.com.routes.dtos.NotificationDto
 import java.sql.Connection
 import java.sql.Statement
 import java.sql.Timestamp
@@ -7,19 +8,7 @@ import javax.sql.DataSource
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
-data class NotificationDto(
-    val id: Int,
-    val userId: Int,
-    val actorId: Int?,
-    val type: String,
-    val text: String?,
-    val isRead: Boolean,
-    val meta: String?, // JSON string
-    val createdAt: String
-)
-
 class NotificationSchema(private val dataSource: DataSource) {
-
     private suspend fun <T> dbQuery(block: (Connection) -> T): T = withContext(Dispatchers.IO) {
         val conn = dataSource.connection
         try {
@@ -82,6 +71,36 @@ class NotificationSchema(private val dataSource: DataSource) {
         conn.prepareStatement(sql).use { stmt ->
             stmt.setInt(1, notificationId)
             stmt.setInt(2, userId)
+            stmt.executeUpdate() > 0
+        }
+    }
+
+    suspend fun deleteNotification(userId: Int, notificationId: Int): Boolean = dbQuery { conn ->
+        val sql = "DELETE FROM notifications WHERE id = ? AND user_id = ?"
+        conn.prepareStatement(sql).use { stmt ->
+            stmt.setInt(1, notificationId)
+            stmt.setInt(2, userId)
+            stmt.executeUpdate() > 0
+        }
+    }
+
+    suspend fun getUnreadCount(userId: Int): Int = dbQuery { conn ->
+        val sql = "SELECT COUNT(*) as count FROM notifications WHERE user_id = ? AND is_read = FALSE"
+        conn.prepareStatement(sql).use { stmt ->
+            stmt.setInt(1, userId)
+            val rs = stmt.executeQuery()
+            if (rs.next()) {
+                rs.getInt("count")
+            } else {
+                0
+            }
+        }
+    }
+
+    suspend fun markAllAsRead(userId: Int): Boolean = dbQuery { conn ->
+        val sql = "UPDATE notifications SET is_read = TRUE WHERE user_id = ? AND is_read = FALSE"
+        conn.prepareStatement(sql).use { stmt ->
+            stmt.setInt(1, userId)
             stmt.executeUpdate() > 0
         }
     }

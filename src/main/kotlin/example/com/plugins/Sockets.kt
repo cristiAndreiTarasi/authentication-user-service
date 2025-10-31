@@ -4,8 +4,11 @@ import example.com.LiveEventJson
 import example.com.ModerationMessages
 import example.com.ModerationReason
 import example.com.ModerationSeverity
+import example.com.NotificationEventJson
 import example.com.routes.dtos.LiveEvent
+import example.com.routes.dtos.NotificationEvent
 import example.com.routes.dtos.withDefaults
+import example.com.schemas.NotificationSchema
 import example.com.schemas.UserSchema
 import example.com.services.notifications.NotificationSessionRegistry
 import example.com.services.redis.RedisService
@@ -13,13 +16,11 @@ import example.com.services.token.TokenService
 import example.com.services.ws_session.PermissionManager
 import example.com.services.ws_session.SessionManager
 import io.ktor.server.application.Application
-import io.ktor.server.application.ApplicationCall
 import io.ktor.server.application.install
 import io.ktor.server.auth.authenticate
 import io.ktor.server.auth.jwt.JWTPrincipal
 import io.ktor.server.auth.principal
 import io.ktor.server.routing.routing
-import io.ktor.server.websocket.DefaultWebSocketServerSession
 import io.ktor.server.websocket.WebSockets
 import io.ktor.server.websocket.pingPeriod
 import io.ktor.server.websocket.timeout
@@ -31,11 +32,13 @@ import io.ktor.websocket.close
 import io.ktor.websocket.readText
 import kotlinx.coroutines.delay
 import kotlinx.serialization.PolymorphicSerializer
+import kotlinx.serialization.encodeToString
 import java.time.Duration
 
 fun Application.configureSockets(
     redisService: RedisService,
     userSchema: UserSchema,
+    notificationSchema: NotificationSchema,
     authTokenService: TokenService
 ) {
     install(WebSockets) {
@@ -46,6 +49,7 @@ fun Application.configureSockets(
     }
 
     val liveEventPolymorphic = PolymorphicSerializer(LiveEvent::class)
+    val notificationEventPolymorphic = PolymorphicSerializer(NotificationEvent::class)
 
     fun updateStreamStats(roomId: String, redisManager: RedisService) {
         val viewerCount = SessionManager.getRoomSessions(roomId).size
@@ -195,7 +199,7 @@ fun Application.configureSockets(
         redisManager.addToStream(event)
     }
 
-    suspend fun handleEvent(
+    suspend fun handleLiveRoomEvent(
         event: LiveEvent,
         userId: String,
         roomId: String,
@@ -444,17 +448,7 @@ fun Application.configureSockets(
                         val sessionUserId = SessionManager.getUserId(session)
                         val isStreamer = sessionUserId == streamOwnerId
 
-                        // Compose a message: streamer gets a more instructive message
-                        val finalMessage = if (isStreamer) {
-                            event.message ?: "Your stream switched to audio-only due to policy. Please adjust content."
-                        } else {
-                            event.message ?: "This broadcast has switched to audio-only."
-                        }
-
-                        // Attach message to a copy for user-specific delivery if desired
-                        val userSpecificEvent = event.copy(message = finalMessage)
-
-                        val json = LiveEventJson.encodeToString(liveEventPolymorphic, userSpecificEvent.withDefaults())
+                        val json = LiveEventJson.encodeToString(liveEventPolymorphic, event.withDefaults())
                         session.send(Frame.Text(json))
                     } catch (e: Exception) {
                         // ignore send failures for individual sessions
@@ -467,7 +461,39 @@ fun Application.configureSockets(
         }
     }
 
+    suspend fun handleNotificationEvent(
+        event: NotificationEvent,
+        userId: Int,
+        notificationSchema: NotificationSchema
+    ) {
+        when (event) {
+            is NotificationEvent.MarkRead -> {
+                // Mark notification as read
+                val success = notificationSchema.markAsRead(userId, event.notificationId)
+                if (success) {
+                    println("DEBUG: User $userId marked notification ${event.notificationId} as read")
+
+                    // Send updated unread count
+                    val unreadCount = notificationSchema.getUnreadCount(userId)
+                    val updateEvent = NotificationEvent.ProfileUpdate(
+                        userId = userId.toString(),
+                        updateType = "unread",
+                        count = unreadCount
+                    ).withDefaults()
+                    val json = NotificationEventJson.encodeToString(updateEvent)
+                    NotificationSessionRegistry.sendToUser(userId, json)
+                }
+            }
+
+            // Add other notification event types as needed
+            else -> {
+                println("DEBUG: Unhandled notification event type: ${event::class.simpleName}")
+            }
+        }
+    }
+
     routing {
+        // Keep /liveRoom for now (but plan to split into chat/control)
         webSocket("/liveRoom/{roomId}/{userId}") {
             val roomId = call.parameters["roomId"]!!
             val userId = call.parameters["userId"]!!
@@ -515,7 +541,7 @@ fun Application.configureSockets(
                     username = username,
                     timestamp = System.currentTimeMillis()
                 )
-                handleEvent(joinEvent, userId, roomId, redisService)
+                handleLiveRoomEvent(joinEvent, userId, roomId, redisService)
 
                 // Listen for incoming messages
                 for (frame in incoming) {
@@ -523,7 +549,7 @@ fun Application.configureSockets(
                         is Frame.Text -> {
                             // Use LiveEventJson for decoding
                             val event = LiveEventJson.decodeFromString<LiveEvent>(frame.readText())
-                            handleEvent(event, userId, roomId, redisService)
+                            handleLiveRoomEvent(event, userId, roomId, redisService)
                         }
                         else -> {}
                     }
@@ -533,7 +559,7 @@ fun Application.configureSockets(
                 SessionManager.removeSession(this)
 
                 // Handle leave event
-                handleEvent(
+                handleLiveRoomEvent(
                     LiveEvent.LeaveRoom(
                         roomId = roomId,
                         initiatorId = userId,
@@ -577,26 +603,57 @@ fun Application.configureSockets(
         }
 
         authenticate("auth-jwt") {
+            // Rename /notifications to /social and prepare for additional event types
             webSocket("/notifications") {
                 val principal = call.principal<JWTPrincipal>() ?: run {
+                    println("DEBUG: No JWT principal found")
                     close(CloseReason(CloseReason.Codes.VIOLATED_POLICY, "Unauthenticated"))
                     return@webSocket
                 }
 
-                val idStr = authTokenService.getClaim(principal, "id") ?: authTokenService.getClaim(principal, "sub")
+                val idStr = authTokenService.getClaim(principal, "userId") ?: authTokenService.getClaim(principal, "sub")
                 val userId = idStr?.toIntOrNull() ?: run {
+                    println("DEBUG: Invalid user id: $idStr")
                     close(CloseReason(CloseReason.Codes.VIOLATED_POLICY, "Invalid user id"))
                     return@webSocket
                 }
 
+                println("DEBUG: WebSocket connected for user $userId")
+
                 // Register session
                 NotificationSessionRegistry.register(userId, this)
 
+                suspend fun sendInitialNotificationState(userId: Int) {
+                    try {
+                        val unreadCount = notificationSchema.getUnreadCount(userId)
+                        val recentNotifications = notificationSchema.fetchNotifications(userId, limit = 10, offset = 0)
+
+                        val initialEvent = NotificationEvent.InitialState(
+                            userId = userId.toString(),
+                            unreadCount = unreadCount,
+                            notifications = recentNotifications
+                        )
+
+                        val json = NotificationEventJson.encodeToString(notificationEventPolymorphic, initialEvent.withDefaults())
+                        send(Frame.Text(json))
+                        println("DEBUG: Sent initial state to user $userId: unreadCount=$unreadCount, notifications=${recentNotifications.size}")
+                    } catch (e: Exception) {
+                        println("DEBUG: Failed to send initial state to user $userId: ${e.message}")
+                    }
+                }
+
                 try {
+                    sendInitialNotificationState(userId)
+
                     for (frame in incoming) {
                         when (frame) {
                             is Frame.Text -> {
-                                // optional messages from client e.g. ack / ping
+                                try {
+                                    val event = NotificationEventJson.decodeFromString<NotificationEvent>(frame.readText())
+                                    handleNotificationEvent(event, userId, notificationSchema)
+                                } catch (e: Exception) {
+                                    println("DEBUG: Error decoding notification event: ${e.message}")
+                                }
                             }
                             else -> {}
                         }

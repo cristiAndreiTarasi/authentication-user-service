@@ -1,6 +1,7 @@
 package example.com
 
 import example.com.routes.dtos.LiveEvent
+import example.com.routes.dtos.NotificationEvent
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.modules.*
 
@@ -27,6 +28,19 @@ val LiveEventJson = Json {
             subclass(LiveEvent.ModerationWarningEvent::class)
             subclass(LiveEvent.StreamTerminatedEvent::class)
             subclass(LiveEvent.ModerationClearEvent::class)
+        }
+    }
+}
+
+val NotificationEventJson = Json {
+    ignoreUnknownKeys = true
+    classDiscriminator = "type"
+    serializersModule = SerializersModule {
+        polymorphic(NotificationEvent::class) {
+            subclass(NotificationEvent.Follow::class)
+            subclass(NotificationEvent.InitialState::class)
+            subclass(NotificationEvent.MarkRead::class)
+            subclass(NotificationEvent.ProfileUpdate::class)
         }
     }
 }

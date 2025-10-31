@@ -1,6 +1,7 @@
 package example.com.services.redis
 
 import example.com.LiveEventJson
+import example.com.SocialEventType
 import example.com.routes.dtos.LiveEvent
 import example.com.routes.dtos.withDefaults
 import example.com.services.ws_session.SessionManager
@@ -25,7 +26,7 @@ import java.time.Instant
 
 @Serializable
 data class SocialEvent(
-    val type: String,                     // "follow" | "unfollow" | "block" | ...
+    val type: SocialEventType,             // "follow" | "unfollow" | "block" | ...
     val actorId: String,
     val actorUsername: String? = null,    // optional helpful display name
     val targetId: String,
@@ -62,7 +63,13 @@ class RedisService(redisUrl: String) {
      * Push a simple social event (follow/unfollow) to SOCIAL_STREAM.
      * Message includes both an 'event' JSON field and explicit typed fields to make consumer filtering cheap.
      */
-    fun addSocialEvent(type: String, actorId: Int, targetId: Int, actorUsername: String? = null, meta: Map<String, String> = emptyMap()) {
+    fun addSocialEvent(
+        type: SocialEventType,
+        actorId: Int,
+        targetId: Int,
+        actorUsername: String? = null,
+        meta: Map<String, String> = emptyMap()
+    ) {
         val event = SocialEvent(
             type = type,
             actorId = actorId.toString(),
@@ -78,7 +85,7 @@ class RedisService(redisUrl: String) {
         // Build a Map<String, String> for xadd - omit nullable fields if null
         val map = mutableMapOf<String, String>(
             "event" to payload,
-            "type" to event.type,
+            "type" to event.type.name,
             "actorId" to event.actorId,
             "targetId" to event.targetId,
             "ts" to event.ts

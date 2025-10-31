@@ -44,6 +44,19 @@ val appJson = Json {
     ignoreUnknownKeys = true
 }
 
+enum class ProfileUpdateType {
+    FOLLOWERS,
+    FOLLOWING,
+    UNREAD_COUNT
+}
+
+enum class SocialEventType {
+    FOLLOW,
+    UNFOLLOW,
+    BLOCK
+    // Add more as needed: LIKE, COMMENT, MENTION, etc.
+}
+
 enum class StreamStatus(val dbValue: String) {
     CREATED("created"),      // Stream created, not yet publishing
     PUBLISHING("publishing"), // Stream is live and broadcasting

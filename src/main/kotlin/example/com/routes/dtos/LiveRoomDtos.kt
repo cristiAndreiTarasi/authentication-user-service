@@ -1,10 +1,7 @@
 package example.com.routes.dtos
 
-import io.ktor.server.websocket.DefaultWebSocketServerSession
-import kotlinx.serialization.Required
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
-import java.util.UUID
 
 @Serializable
 sealed class LiveEvent {
@@ -191,7 +188,7 @@ sealed class LiveEvent {
 
 }
 
-// guarantees initiatorId + timestamp even if a callsite forgets them
+// guarantees initiatorId + timestamp even if a call site forgets them
 fun LiveEvent.withDefaults(): LiveEvent {
     val now = System.currentTimeMillis()
     return when (this) {
