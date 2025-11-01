@@ -7,6 +7,8 @@ import java.sql.Timestamp
 import javax.sql.DataSource
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
 
 class NotificationSchema(private val dataSource: DataSource) {
     private suspend fun <T> dbQuery(block: (Connection) -> T): T = withContext(Dispatchers.IO) {
@@ -23,15 +25,19 @@ class NotificationSchema(private val dataSource: DataSource) {
         actorId: Int?,
         type: String,
         text: String?,
-        metaJson: String? = "{}"
+        meta: Map<String, String> = emptyMap() // Change to Map<String, String>
     ): Boolean = dbQuery { conn ->
-        val sql = "INSERT INTO notifications (user_id, actor_id, type, text, meta) VALUES (?,?,?,?,?)"
-        conn.prepareStatement(sql, Statement.RETURN_GENERATED_KEYS).use { stmt ->
+        val sql = "INSERT INTO notifications (user_id, actor_id, type, text, meta) VALUES (?,?,?,?,?::jsonb)"
+        conn.prepareStatement(sql).use { stmt ->
             stmt.setInt(1, userId)
             if (actorId != null) stmt.setInt(2, actorId) else stmt.setNull(2, java.sql.Types.INTEGER)
             stmt.setString(3, type)
-            stmt.setString(4, text)
+            if (text != null) stmt.setString(4, text) else stmt.setNull(4, java.sql.Types.VARCHAR)
+
+            // Convert map to JSON string - now it's Map<String, String> so serialization works
+            val metaJson = Json.encodeToString(meta)
             stmt.setString(5, metaJson)
+
             stmt.executeUpdate() > 0
         }
     }

@@ -9,6 +9,7 @@ import example.com.routes.dtos.UpdateOccupationDto
 import example.com.routes.dtos.UpdateUsernameDto
 import example.com.routes.dtos.UploadImageResponse
 import example.com.routes.dtos.UsernameResponse
+import example.com.schemas.NotificationSchema
 import example.com.schemas.UserSchema
 import example.com.services.gridfs.GridFSService
 import example.com.services.redis.RedisService
@@ -36,10 +37,12 @@ import net.coobird.thumbnailator.Thumbnails
 import org.bson.types.ObjectId
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
+import java.time.Instant
 import javax.sql.DataSource
 
 fun Route.userRoutes(
     userSchema: UserSchema,
+    notificationSchema: NotificationSchema,
     authTokenService: ITokenService,
     dataSource: DataSource,
     gridFSService: GridFSService,
@@ -262,6 +265,14 @@ fun Route.userRoutes(
             val ok = userSchema.followUser(currentUserId, targetId)
             if (ok) {
                 try {
+                    notificationSchema.insertNotification(
+                        userId = targetId,
+                        actorId = currentUserId,
+                        type = "follow",
+                        text = "${currentUser.username} started following you",
+                        meta = mapOf("followedAt" to Instant.now().toString())
+                    )
+
                     redisService.addSocialEvent(
                         type = SocialEventType.FOLLOW,
                         actorId = currentUserId,

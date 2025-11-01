@@ -103,14 +103,14 @@ class NotificationWorker(
 
         // 2. Store in database (for offline users)
         if (!delivered) {
-
-
             val stored = notificationSchema.insertNotification(
                 userId = targetIdInt,
                 actorId = actorIdInt,
                 type = "follow",
                 text = storedText,
-                metaJson = """{"actorUsername":"${event.actorUsername ?: ""}"}"""
+                meta = mapOf(
+                    "actorUsername" to (event.actorUsername ?: "")
+                )
             )
             println("DEBUG: Database storage for user $targetIdInt: $stored")
         }

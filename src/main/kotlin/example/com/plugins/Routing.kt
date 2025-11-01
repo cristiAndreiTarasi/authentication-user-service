@@ -45,7 +45,7 @@ fun Application.configureRouting(
 ) {
     routing {
         authenticationRoutes(userSchema, tokenSchema, hashingService, authTokenService)
-        userRoutes(userSchema, authTokenService, dataSource, gridFSService, redisService)
+        userRoutes(userSchema, notificationSchema, authTokenService, dataSource, gridFSService, redisService)
         streamRoutes(streamSchema, gridFSService, publishTokenService, userSchema)
         eventRoutes(eventSchema, gridFSService, userSchema, streamSchema)
         tagRoutes(tagSchema)

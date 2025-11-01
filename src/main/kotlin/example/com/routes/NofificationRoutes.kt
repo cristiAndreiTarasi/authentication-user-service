@@ -16,35 +16,24 @@ fun Route.notificationRoutes(notificationSchema: NotificationSchema) {
             /** Fetch all notifications for a given user */
             get {
                 val principal = call.principal<JWTPrincipal>() ?: return@get call.respond(HttpStatusCode.Unauthorized)
-                val userIdParam = call.parameters["userId"]?.toIntOrNull()
-                    ?: return@get call.respond(HttpStatusCode.BadRequest, "Invalid userId")
 
-                val subjectId = principal.payload.getClaim("userId").asInt()
-                if (subjectId != userIdParam) {
-                    return@get call.respond(HttpStatusCode.Forbidden, "You can only access your own notifications")
-                }
-
+                val userId = principal.payload.getClaim("userId").asInt()
                 val limit = call.request.queryParameters["limit"]?.toIntOrNull() ?: 50
                 val offset = call.request.queryParameters["offset"]?.toIntOrNull() ?: 0
 
-                val notifications = notificationSchema.fetchNotifications(userIdParam, limit, offset)
+                val notifications = notificationSchema.fetchNotifications(userId, limit, offset)
                 call.respond(HttpStatusCode.OK, notifications)
             }
 
             /** Mark a notification as read */
             put ("/{id}/read") {
                 val principal = call.principal<JWTPrincipal>() ?: return@put call.respond(HttpStatusCode.Unauthorized)
-                val userIdParam = call.parameters["userId"]?.toIntOrNull()
-                    ?: return@put call.respond(HttpStatusCode.BadRequest, "Invalid userId")
+
+                val userId = principal.payload.getClaim("userId").asInt()
                 val notifId = call.parameters["id"]?.toIntOrNull()
                     ?: return@put call.respond(HttpStatusCode.BadRequest, "Invalid notification id")
 
-                val subjectId = principal.payload.getClaim("userId").asInt()
-                if (subjectId != userIdParam) {
-                    return@put call.respond(HttpStatusCode.Forbidden, "You can only modify your own notifications")
-                }
-
-                val success = notificationSchema.markAsRead(userIdParam, notifId)
+                val success = notificationSchema.markAsRead(userId, notifId)
                 if (success) {
                     call.respond(HttpStatusCode.OK, mapOf("success" to true))
                 } else {
