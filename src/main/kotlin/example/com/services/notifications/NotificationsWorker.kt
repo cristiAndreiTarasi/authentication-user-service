@@ -82,17 +82,19 @@ class NotificationWorker(
         targetIdInt: Int,
         messageId: String
     ) {
-        println("🔔 DEBUG: Processing follow event - actor: $actorIdInt, target: $targetIdInt")
+        val actorUsername = event.actorUsername ?: run {
+            val user = userSchema.findById(actorIdInt)
+            user?.username ?: "Someone"
+        }
 
-        val actorName = event.actorUsername ?: "Someone"
-        val text = "$actorName followed you"
+        val storedText = "$actorUsername started following you"
 
         // 1. Send Follow NotificationEvent via WebSocket
         val followEvent = NotificationEvent.Follow(
             userId = targetIdInt.toString(),
             actorId = event.actorId,
-            actorUsername = event.actorUsername,
-            text = text
+            actorUsername = actorUsername,
+            text = storedText
         ).withDefaults()
 
         val eventJson = NotificationEventJson.encodeToString(followEvent)
@@ -101,11 +103,13 @@ class NotificationWorker(
 
         // 2. Store in database (for offline users)
         if (!delivered) {
+
+
             val stored = notificationSchema.insertNotification(
                 userId = targetIdInt,
                 actorId = actorIdInt,
                 type = "follow",
-                text = text,
+                text = storedText,
                 metaJson = """{"actorUsername":"${event.actorUsername ?: ""}"}"""
             )
             println("DEBUG: Database storage for user $targetIdInt: $stored")
@@ -173,3 +177,5 @@ class NotificationWorker(
         redisService.consumerCommands.xack(streamKey, consumerGroup, messageId)
     }
 }
+
+

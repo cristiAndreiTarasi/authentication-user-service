@@ -257,11 +257,17 @@ fun Route.userRoutes(
 
             val targetId = call.parameters["targetId"]?.toIntOrNull() ?: return@post call.respond(HttpStatusCode.BadRequest)
             if (currentUserId == targetId) return@post call.respond(HttpStatusCode.BadRequest, "Cannot follow yourself")
+            val currentUser = userSchema.findById(currentUserId) ?: return@post call.respond(HttpStatusCode.NotFound, "User not found")
 
             val ok = userSchema.followUser(currentUserId, targetId)
             if (ok) {
                 try {
-                    redisService.addSocialEvent(SocialEventType.FOLLOW, currentUserId, targetId)
+                    redisService.addSocialEvent(
+                        type = SocialEventType.FOLLOW,
+                        actorId = currentUserId,
+                        targetId = targetId,
+                        actorUsername = currentUser.username
+                    )
                 } catch (e: Exception) {
                     // log, but do not fail the request — DB is the source of truth
                     call.application.environment.log.error("Failed to publish social event", e)
@@ -278,11 +284,17 @@ fun Route.userRoutes(
 
             val targetId = call.parameters["targetId"]?.toIntOrNull() ?: return@delete call.respond(HttpStatusCode.BadRequest)
             if (currentUserId == targetId) return@delete call.respond(HttpStatusCode.BadRequest, "Cannot unfollow yourself")
+            val currentUser = userSchema.findById(currentUserId) ?: return@delete call.respond(HttpStatusCode.NotFound, "User not found")
 
             val ok = userSchema.unfollowUser(currentUserId, targetId)
             if (ok) {
                 try {
-                    redisService.addSocialEvent(SocialEventType.UNFOLLOW, currentUserId, targetId)
+                    redisService.addSocialEvent(
+                        type = SocialEventType.UNFOLLOW,
+                        actorId = currentUserId,
+                        targetId = targetId,
+                        actorUsername = currentUser.username
+                    )
                 } catch (e: Exception) {
                     call.application.environment.log.error("Failed to publish social event", e)
                 }

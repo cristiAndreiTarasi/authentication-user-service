@@ -11,7 +11,7 @@ import io.ktor.server.auth.jwt.JWTPrincipal
 
 fun Route.notificationRoutes(notificationSchema: NotificationSchema) {
     authenticate("auth-jwt") {
-        route("/users/{userId}/notifications") {
+        route("/notifications") {
 
             /** Fetch all notifications for a given user */
             get {
@@ -32,7 +32,7 @@ fun Route.notificationRoutes(notificationSchema: NotificationSchema) {
             }
 
             /** Mark a notification as read */
-            put("{id}/read") {
+            put ("/{id}/read") {
                 val principal = call.principal<JWTPrincipal>() ?: return@put call.respond(HttpStatusCode.Unauthorized)
                 val userIdParam = call.parameters["userId"]?.toIntOrNull()
                     ?: return@put call.respond(HttpStatusCode.BadRequest, "Invalid userId")
@@ -53,7 +53,7 @@ fun Route.notificationRoutes(notificationSchema: NotificationSchema) {
             }
 
             /** Delete a notification */
-            delete("{id}") {
+            delete ("/{id}") {
                 val principal = call.principal<JWTPrincipal>() ?: return@delete call.respond(HttpStatusCode.Unauthorized)
                 val userIdParam = call.parameters["userId"]?.toIntOrNull()
                     ?: return@delete call.respond(HttpStatusCode.BadRequest, "Invalid userId")
@@ -74,7 +74,7 @@ fun Route.notificationRoutes(notificationSchema: NotificationSchema) {
             }
 
             // ADD: Mark all notifications as read
-            put("read-all") {
+            put ("/read-all") {
                 val principal = call.principal<JWTPrincipal>() ?: return@put call.respond(HttpStatusCode.Unauthorized)
                 val userIdParam = call.parameters["userId"]?.toIntOrNull()
                     ?: return@put call.respond(HttpStatusCode.BadRequest, "Invalid userId")
@@ -93,7 +93,7 @@ fun Route.notificationRoutes(notificationSchema: NotificationSchema) {
             }
 
             // ADD: Get unread count for badge
-            get("unread-count") {
+            get ("/unread-count") {
                 val principal = call.principal<JWTPrincipal>() ?: return@get call.respond(HttpStatusCode.Unauthorized)
                 val userIdParam = call.parameters["userId"]?.toIntOrNull()
                     ?: return@get call.respond(HttpStatusCode.BadRequest, "Invalid userId")
