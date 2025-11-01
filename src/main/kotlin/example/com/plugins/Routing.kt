@@ -22,6 +22,7 @@ import example.com.services.redis.RedisService
 import example.com.services.token.ITokenService
 import io.ktor.client.HttpClient
 import io.ktor.server.application.Application
+import io.ktor.server.routing.route
 import io.ktor.server.routing.routing
 import javax.sql.DataSource
 
@@ -49,7 +50,14 @@ fun Application.configureRouting(
         eventRoutes(eventSchema, gridFSService, userSchema, streamSchema)
         tagRoutes(tagSchema)
         categoryRoutes(categorySchema)
-        srsHttpHookRoutes(userSchema, publishTokenService, streamSchema, httpClient, redisService, moderationPublishSecret)
+        srsHttpHookRoutes(
+            userSchema,
+            publishTokenService,
+            streamSchema,
+            httpClient,
+            redisService,
+            moderationPublishSecret
+        )
         moderationRoutes(redisService, streamSchema, moderationPublishSecret)
         notificationRoutes(notificationSchema)
     }

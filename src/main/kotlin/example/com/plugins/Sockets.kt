@@ -20,6 +20,7 @@ import io.ktor.server.application.install
 import io.ktor.server.auth.authenticate
 import io.ktor.server.auth.jwt.JWTPrincipal
 import io.ktor.server.auth.principal
+import io.ktor.server.routing.route
 import io.ktor.server.routing.routing
 import io.ktor.server.websocket.WebSockets
 import io.ktor.server.websocket.pingPeriod
@@ -493,173 +494,198 @@ fun Application.configureSockets(
     }
 
     routing {
-        // Keep /liveRoom for now (but plan to split into chat/control)
-        webSocket("/liveRoom/{roomId}/{userId}") {
-            val roomId = call.parameters["roomId"]!!
-            val userId = call.parameters["userId"]!!
-            val user = userSchema.findById(userId.toInt())
-            val username = user?.username ?: "Unknown"
+        route("/ws") {
+            // Keep /liveRoom for now (but plan to split into chat/control)
+            webSocket("/liveRoom/{roomId}/{userId}") {
+                val roomId = call.parameters["roomId"]!!
+                val userId = call.parameters["userId"]!!
+                val user = userSchema.findById(userId.toInt())
+                val username = user?.username ?: "Unknown"
 
-            // Check if session already exists and remove it first
-            SessionManager.getSession(roomId, userId)?.let { existingSession ->
-                try {
-                    existingSession.close(CloseReason(CloseReason.Codes.NORMAL, "Reconnecting"))
-                } catch (e: Exception) {
-                    // Ignore
-                } finally {
-                    SessionManager.removeSession(existingSession)
-                }
-            }
-
-            // Check if user is kicked
-            if (PermissionManager.isKicked(roomId, userId)) {
-                close(CloseReason(CloseReason.Codes.VIOLATED_POLICY, "kicked"))
-                return@webSocket
-            }
-
-            // Register session
-            SessionManager.addSession(roomId, userId, username,this)
-
-            try {
-                // Send chat history first
-                val history = redisService.getRoomHistory(roomId)
-                history.forEach { event ->
-                    val json = LiveEventJson.encodeToString(liveEventPolymorphic, event.withDefaults())
-                    send(Frame.Text(json))
-                }
-
-                // Send initial state
-                sendInitialState(roomId, this, redisService)
-
-                // Send stream owner info if available
-                sendStreamOwnerInfo(roomId, this, userSchema)
-
-                // Handle join event
-                val joinEvent = LiveEvent.JoinRoom(
-                    roomId = roomId,
-                    initiatorId = userId,
-                    username = username,
-                    timestamp = System.currentTimeMillis()
-                )
-                handleLiveRoomEvent(joinEvent, userId, roomId, redisService)
-
-                // Listen for incoming messages
-                for (frame in incoming) {
-                    when (frame) {
-                        is Frame.Text -> {
-                            // Use LiveEventJson for decoding
-                            val event = LiveEventJson.decodeFromString<LiveEvent>(frame.readText())
-                            handleLiveRoomEvent(event, userId, roomId, redisService)
-                        }
-                        else -> {}
+                // Check if session already exists and remove it first
+                SessionManager.getSession(roomId, userId)?.let { existingSession ->
+                    try {
+                        existingSession.close(CloseReason(CloseReason.Codes.NORMAL, "Reconnecting"))
+                    } catch (e: Exception) {
+                        // Ignore
+                    } finally {
+                        SessionManager.removeSession(existingSession)
                     }
                 }
-            } finally {
-                // Remove session first for accurate count
-                SessionManager.removeSession(this)
 
-                // Handle leave event
-                handleLiveRoomEvent(
-                    LiveEvent.LeaveRoom(
+                // Check if user is kicked
+                if (PermissionManager.isKicked(roomId, userId)) {
+                    close(CloseReason(CloseReason.Codes.VIOLATED_POLICY, "kicked"))
+                    return@webSocket
+                }
+
+                // Register session
+                SessionManager.addSession(roomId, userId, username, this)
+
+                try {
+                    // Send chat history first
+                    val history = redisService.getRoomHistory(roomId)
+                    history.forEach { event ->
+                        val json =
+                            LiveEventJson.encodeToString(liveEventPolymorphic, event.withDefaults())
+                        send(Frame.Text(json))
+                    }
+
+                    // Send initial state
+                    sendInitialState(roomId, this, redisService)
+
+                    // Send stream owner info if available
+                    sendStreamOwnerInfo(roomId, this, userSchema)
+
+                    // Handle join event
+                    val joinEvent = LiveEvent.JoinRoom(
                         roomId = roomId,
                         initiatorId = userId,
                         username = username,
                         timestamp = System.currentTimeMillis()
-                    ),
-                    userId,
-                    roomId,
-                    redisService
-                )
+                    )
+                    handleLiveRoomEvent(joinEvent, userId, roomId, redisService)
 
-                // Check if stream owner is leaving
-                if (PermissionManager.isStreamOwner(roomId, userId)) {
-                    val endEvent = LiveEvent.StreamEndedEvent(roomId = roomId)
-                    redisService.addToStream(endEvent)
-
-                    delay(200L)
-
-                    SessionManager.getRoomSessions(roomId).forEach { session ->
-                        try {
-                            session.close(CloseReason(CloseReason.Codes.GOING_AWAY, "Stream ended"))
-                        } catch (e: Exception) {
-                            // ignore
-                        }
-
-                        SessionManager.removeSession(session)
-                    }
-
-                    // Clean up room state
-                    PermissionManager.removeRoom(roomId)
-                    redisService.deleteCounters(roomId)
-                } else {
-                    // Only clean up if room is empty
-                    if (SessionManager.getRoomSessions(roomId).isEmpty()) {
-                        PermissionManager.removeRoom(roomId)
-                        redisService.deleteCounters(roomId)
-                        sendStreamEndedEvent(roomId)
-                    }
-                }
-            }
-        }
-
-        authenticate("auth-jwt") {
-            // Rename /notifications to /social and prepare for additional event types
-            webSocket("/notifications") {
-                val principal = call.principal<JWTPrincipal>() ?: run {
-                    println("DEBUG: No JWT principal found")
-                    close(CloseReason(CloseReason.Codes.VIOLATED_POLICY, "Unauthenticated"))
-                    return@webSocket
-                }
-
-                val idStr = authTokenService.getClaim(principal, "userId") ?: authTokenService.getClaim(principal, "sub")
-                val userId = idStr?.toIntOrNull() ?: run {
-                    println("DEBUG: Invalid user id: $idStr")
-                    close(CloseReason(CloseReason.Codes.VIOLATED_POLICY, "Invalid user id"))
-                    return@webSocket
-                }
-
-                println("DEBUG: WebSocket connected for user $userId")
-
-                // Register session
-                NotificationSessionRegistry.register(userId, this)
-
-                suspend fun sendInitialNotificationState(userId: Int) {
-                    try {
-                        val unreadCount = notificationSchema.getUnreadCount(userId)
-                        val recentNotifications = notificationSchema.fetchNotifications(userId, limit = 10, offset = 0)
-
-                        val initialEvent = NotificationEvent.InitialState(
-                            userId = userId.toString(),
-                            unreadCount = unreadCount,
-                            notifications = recentNotifications
-                        )
-
-                        val json = NotificationEventJson.encodeToString(notificationEventPolymorphic, initialEvent.withDefaults())
-                        send(Frame.Text(json))
-                        println("DEBUG: Sent initial state to user $userId: unreadCount=$unreadCount, notifications=${recentNotifications.size}")
-                    } catch (e: Exception) {
-                        println("DEBUG: Failed to send initial state to user $userId: ${e.message}")
-                    }
-                }
-
-                try {
-                    sendInitialNotificationState(userId)
-
+                    // Listen for incoming messages
                     for (frame in incoming) {
                         when (frame) {
                             is Frame.Text -> {
-                                try {
-                                    val event = NotificationEventJson.decodeFromString<NotificationEvent>(frame.readText())
-                                    handleNotificationEvent(event, userId, notificationSchema)
-                                } catch (e: Exception) {
-                                    println("DEBUG: Error decoding notification event: ${e.message}")
-                                }
+                                // Use LiveEventJson for decoding
+                                val event =
+                                    LiveEventJson.decodeFromString<LiveEvent>(frame.readText())
+                                handleLiveRoomEvent(event, userId, roomId, redisService)
                             }
+
                             else -> {}
                         }
                     }
                 } finally {
-                    NotificationSessionRegistry.unregister(userId)
+                    // Remove session first for accurate count
+                    SessionManager.removeSession(this)
+
+                    // Handle leave event
+                    handleLiveRoomEvent(
+                        LiveEvent.LeaveRoom(
+                            roomId = roomId,
+                            initiatorId = userId,
+                            username = username,
+                            timestamp = System.currentTimeMillis()
+                        ),
+                        userId,
+                        roomId,
+                        redisService
+                    )
+
+                    // Check if stream owner is leaving
+                    if (PermissionManager.isStreamOwner(roomId, userId)) {
+                        val endEvent = LiveEvent.StreamEndedEvent(roomId = roomId)
+                        redisService.addToStream(endEvent)
+
+                        delay(200L)
+
+                        SessionManager.getRoomSessions(roomId).forEach { session ->
+                            try {
+                                session.close(
+                                    CloseReason(
+                                        CloseReason.Codes.GOING_AWAY,
+                                        "Stream ended"
+                                    )
+                                )
+                            } catch (e: Exception) {
+                                // ignore
+                            }
+
+                            SessionManager.removeSession(session)
+                        }
+
+                        // Clean up room state
+                        PermissionManager.removeRoom(roomId)
+                        redisService.deleteCounters(roomId)
+                    } else {
+                        // Only clean up if room is empty
+                        if (SessionManager.getRoomSessions(roomId).isEmpty()) {
+                            PermissionManager.removeRoom(roomId)
+                            redisService.deleteCounters(roomId)
+                            sendStreamEndedEvent(roomId)
+                        }
+                    }
+                }
+            }
+
+            authenticate("auth-jwt") {
+                // Rename /notifications to /social and prepare for additional event types
+                webSocket("/notifications") {
+                    val principal = call.principal<JWTPrincipal>() ?: run {
+                        println("DEBUG: No JWT principal found")
+                        close(CloseReason(CloseReason.Codes.VIOLATED_POLICY, "Unauthenticated"))
+                        return@webSocket
+                    }
+
+                    val idStr =
+                        authTokenService.getClaim(principal, "userId") ?: authTokenService.getClaim(
+                            principal,
+                            "sub"
+                        )
+                    val userId = idStr?.toIntOrNull() ?: run {
+                        println("DEBUG: Invalid user id: $idStr")
+                        close(CloseReason(CloseReason.Codes.VIOLATED_POLICY, "Invalid user id"))
+                        return@webSocket
+                    }
+
+                    println("DEBUG: WebSocket connected for user $userId")
+
+                    // Register session
+                    NotificationSessionRegistry.register(userId, this)
+
+                    suspend fun sendInitialNotificationState(userId: Int) {
+                        try {
+                            val unreadCount = notificationSchema.getUnreadCount(userId)
+                            val recentNotifications = notificationSchema.fetchNotifications(
+                                userId,
+                                limit = 10,
+                                offset = 0
+                            )
+
+                            val initialEvent = NotificationEvent.InitialState(
+                                userId = userId.toString(),
+                                unreadCount = unreadCount,
+                                notifications = recentNotifications
+                            )
+
+                            val json = NotificationEventJson.encodeToString(
+                                notificationEventPolymorphic,
+                                initialEvent.withDefaults()
+                            )
+                            send(Frame.Text(json))
+                            println("DEBUG: Sent initial state to user $userId: unreadCount=$unreadCount, notifications=${recentNotifications.size}")
+                        } catch (e: Exception) {
+                            println("DEBUG: Failed to send initial state to user $userId: ${e.message}")
+                        }
+                    }
+
+                    try {
+                        sendInitialNotificationState(userId)
+
+                        for (frame in incoming) {
+                            when (frame) {
+                                is Frame.Text -> {
+                                    try {
+                                        val event =
+                                            NotificationEventJson.decodeFromString<NotificationEvent>(
+                                                frame.readText()
+                                            )
+                                        handleNotificationEvent(event, userId, notificationSchema)
+                                    } catch (e: Exception) {
+                                        println("DEBUG: Error decoding notification event: ${e.message}")
+                                    }
+                                }
+
+                                else -> {}
+                            }
+                        }
+                    } finally {
+                        NotificationSessionRegistry.unregister(userId)
+                    }
                 }
             }
         }
