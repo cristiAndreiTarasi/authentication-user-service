@@ -84,7 +84,7 @@ class NotificationWorker(
             return
         }
 
-        // Get all followers of the user who went live - use userIds from TallyDto
+        // Get all followers of the user who went live
         val followersTally = userSchema.getUserFollowers(actorIdInt)
         val followerIds = followersTally.userIds
 
@@ -93,32 +93,30 @@ class NotificationWorker(
 
         // Send notifications to all followers
         followerIds.forEach { followerId ->
-            // 1. Send Live NotificationEvent via WebSocket
+            // 1. ALWAYS Store in database
+            val stored = notificationSchema.insertNotification(
+                userId = followerId,
+                actorId = actorIdInt,
+                type = "user_is_live",
+                text = storedText,
+                meta = mapOf(
+                    "actorUsername" to liveUser.username,
+                    "actorAvatarUrl" to avatarUrl,
+                    "streamId" to (event.meta["streamId"] ?: "")
+                )
+            )
+
+            // 2. Send Live NotificationEvent via WebSocket
             val liveEvent = NotificationEvent.UserIsLive(
                 userId = followerId.toString(),
                 actorId = event.actorId,
                 actorUsername = liveUser.username,
-                actorAvatarUrl = avatarUrl, // Add avatar URL
+                actorAvatarUrl = avatarUrl,
                 text = storedText
             ).withDefaults()
 
             val eventJson = NotificationEventJson.encodeToString(liveEvent)
             val delivered = NotificationSessionRegistry.sendToUser(followerId, eventJson)
-
-            // 2. Store in database (for offline users)
-            if (!delivered) {
-                notificationSchema.insertNotification(
-                    userId = followerId,
-                    actorId = actorIdInt,
-                    type = "user_is_live",
-                    text = storedText,
-                    meta = mapOf(
-                        "actorUsername" to liveUser.username,
-                        "actorAvatarUrl" to avatarUrl,
-                        "streamId" to (event.meta["streamId"] ?: "")
-                    )
-                )
-            }
         }
 
         redisService.consumerCommands.xack(streamKey, consumerGroup, messageId)
@@ -136,35 +134,20 @@ class NotificationWorker(
         }
 
         val storedText = "$actorUsername started following you"
-        val avatarUrl = "/users/fetch/${actorIdInt}/avatar" // Add avatar URL
+        val avatarUrl = "/users/fetch/${actorIdInt}/avatar"
 
-        // 1. Send Follow NotificationEvent via WebSocket
+        // 2. Send Follow NotificationEvent via WebSocket (for real-time)
         val followEvent = NotificationEvent.Follow(
             userId = targetIdInt.toString(),
             actorId = event.actorId,
             actorUsername = actorUsername,
-            actorAvatarUrl = avatarUrl, // Add avatar URL
+            actorAvatarUrl = avatarUrl,
             text = storedText
         ).withDefaults()
 
         val eventJson = NotificationEventJson.encodeToString(followEvent)
         val delivered = NotificationSessionRegistry.sendToUser(targetIdInt, eventJson)
         println("DEBUG: WebSocket Follow event delivery to user $targetIdInt: $delivered")
-
-        // 2. Store in database (for offline users)
-        if (!delivered) {
-            val stored = notificationSchema.insertNotification(
-                userId = targetIdInt,
-                actorId = actorIdInt,
-                type = "follow",
-                text = storedText,
-                meta = mapOf(
-                    "actorUsername" to actorUsername,
-                    "actorAvatarUrl" to avatarUrl // Store avatar URL in meta
-                )
-            )
-            println("DEBUG: Database storage for user $targetIdInt: $stored")
-        }
 
         // 3. Send ProfileUpdate events using enum
         sendProfileUpdate(targetIdInt, ProfileUpdateType.FOLLOWERS)

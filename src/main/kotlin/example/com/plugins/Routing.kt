@@ -44,21 +44,43 @@ fun Application.configureRouting(
     notificationSchema: NotificationSchema
 ) {
     routing {
-        authenticationRoutes(userSchema, tokenSchema, hashingService, authTokenService)
-        userRoutes(userSchema, notificationSchema, authTokenService, dataSource, gridFSService, redisService)
-        streamRoutes(streamSchema, gridFSService, publishTokenService, userSchema)
-        eventRoutes(eventSchema, gridFSService, userSchema, streamSchema)
+        authenticationRoutes(
+            userSchema, tokenSchema,
+            hashingService, authTokenService
+        )
+
+        userRoutes(
+            userSchema, notificationSchema, authTokenService,
+            dataSource, gridFSService, redisService
+        )
+
+        streamRoutes(
+            streamSchema, gridFSService,
+            publishTokenService, userSchema
+        )
+
+        eventRoutes(
+            eventSchema, gridFSService,
+            userSchema, streamSchema
+        )
+
         tagRoutes(tagSchema)
         categoryRoutes(categorySchema)
+
         srsHttpHookRoutes(
-            userSchema,
-            publishTokenService,
-            streamSchema,
-            httpClient,
-            redisService,
-            moderationPublishSecret
+            userSchema, publishTokenService, streamSchema,
+            httpClient, redisService, moderationPublishSecret
         )
-        moderationRoutes(redisService, streamSchema, moderationPublishSecret)
-        notificationRoutes(notificationSchema)
+
+        moderationRoutes(
+            redisService,
+            streamSchema,
+            moderationPublishSecret,
+        )
+
+        notificationRoutes(
+            notificationSchema,
+            authTokenService
+        )
     }
 }

@@ -1,6 +1,7 @@
 package example.com.routes
 
 import example.com.schemas.NotificationSchema
+import example.com.services.token.ITokenService
 import io.ktor.server.application.*
 import io.ktor.server.auth.*
 import io.ktor.server.request.*
@@ -9,27 +10,39 @@ import io.ktor.server.routing.*
 import io.ktor.http.*
 import io.ktor.server.auth.jwt.JWTPrincipal
 
-fun Route.notificationRoutes(notificationSchema: NotificationSchema) {
+fun Route.notificationRoutes(
+    notificationSchema: NotificationSchema,
+    authTokenService: ITokenService
+) {
     authenticate("auth-jwt") {
         route("/notifications") {
-
             /** Fetch all notifications for a given user */
             get {
                 val principal = call.principal<JWTPrincipal>() ?: return@get call.respond(HttpStatusCode.Unauthorized)
 
-                val userId = principal.payload.getClaim("userId").asInt()
+                // Use the same pattern as userRoutes
+                val idStr = authTokenService.getClaim(principal, "userId") ?: authTokenService.getClaim(principal, "sub")
+                val userId = idStr?.toIntOrNull() ?: return@get call.respond(HttpStatusCode.Unauthorized, "Invalid user ID")
+
                 val limit = call.request.queryParameters["limit"]?.toIntOrNull() ?: 50
                 val offset = call.request.queryParameters["offset"]?.toIntOrNull() ?: 0
 
-                val notifications = notificationSchema.fetchNotifications(userId, limit, offset)
-                call.respond(HttpStatusCode.OK, notifications)
+                try {
+                    val notifications = notificationSchema.fetchNotifications(userId, limit, offset)
+                    call.respond(HttpStatusCode.OK, notifications)
+                } catch (e: Exception) {
+                    call.application.log.error("Failed to fetch notifications for user $userId", e)
+                    call.respond(HttpStatusCode.InternalServerError, "Failed to fetch notifications")
+                }
             }
 
             /** Mark a notification as read */
-            put ("/{id}/read") {
+            put("/{id}/read") {
                 val principal = call.principal<JWTPrincipal>() ?: return@put call.respond(HttpStatusCode.Unauthorized)
 
-                val userId = principal.payload.getClaim("userId").asInt()
+                val idStr = authTokenService.getClaim(principal, "userId") ?: authTokenService.getClaim(principal, "sub")
+                val userId = idStr?.toIntOrNull() ?: return@put call.respond(HttpStatusCode.Unauthorized, "Invalid user ID")
+
                 val notifId = call.parameters["id"]?.toIntOrNull()
                     ?: return@put call.respond(HttpStatusCode.BadRequest, "Invalid notification id")
 
@@ -42,19 +55,16 @@ fun Route.notificationRoutes(notificationSchema: NotificationSchema) {
             }
 
             /** Delete a notification */
-            delete ("/{id}") {
+            delete("/{id}") {
                 val principal = call.principal<JWTPrincipal>() ?: return@delete call.respond(HttpStatusCode.Unauthorized)
-                val userIdParam = call.parameters["userId"]?.toIntOrNull()
-                    ?: return@delete call.respond(HttpStatusCode.BadRequest, "Invalid userId")
+
+                val idStr = authTokenService.getClaim(principal, "userId") ?: authTokenService.getClaim(principal, "sub")
+                val userId = idStr?.toIntOrNull() ?: return@delete call.respond(HttpStatusCode.Unauthorized, "Invalid user ID")
+
                 val notifId = call.parameters["id"]?.toIntOrNull()
                     ?: return@delete call.respond(HttpStatusCode.BadRequest, "Invalid notification id")
 
-                val subjectId = principal.payload.getClaim("userId").asInt()
-                if (subjectId != userIdParam) {
-                    return@delete call.respond(HttpStatusCode.Forbidden, "You can only delete your own notifications")
-                }
-
-                val success = notificationSchema.deleteNotification(userIdParam, notifId)
+                val success = notificationSchema.deleteNotification(userId, notifId)
                 if (success) {
                     call.respond(HttpStatusCode.OK, Unit)
                 } else {
@@ -62,18 +72,14 @@ fun Route.notificationRoutes(notificationSchema: NotificationSchema) {
                 }
             }
 
-            // ADD: Mark all notifications as read
-            put ("/read-all") {
+            // Mark all notifications as read
+            put("/read-all") {
                 val principal = call.principal<JWTPrincipal>() ?: return@put call.respond(HttpStatusCode.Unauthorized)
-                val userIdParam = call.parameters["userId"]?.toIntOrNull()
-                    ?: return@put call.respond(HttpStatusCode.BadRequest, "Invalid userId")
 
-                val subjectId = principal.payload.getClaim("userId").asInt()
-                if (subjectId != userIdParam) {
-                    return@put call.respond(HttpStatusCode.Forbidden, "You can only modify your own notifications")
-                }
+                val idStr = authTokenService.getClaim(principal, "userId") ?: authTokenService.getClaim(principal, "sub")
+                val userId = idStr?.toIntOrNull() ?: return@put call.respond(HttpStatusCode.Unauthorized, "Invalid user ID")
 
-                val success = notificationSchema.markAllAsRead(userIdParam)
+                val success = notificationSchema.markAllAsRead(userId)
                 if (success) {
                     call.respond(HttpStatusCode.OK, mapOf("success" to true))
                 } else {
@@ -81,18 +87,14 @@ fun Route.notificationRoutes(notificationSchema: NotificationSchema) {
                 }
             }
 
-            // ADD: Get unread count for badge
-            get ("/unread-count") {
+            // Get unread count for badge
+            get("/unread-count") {
                 val principal = call.principal<JWTPrincipal>() ?: return@get call.respond(HttpStatusCode.Unauthorized)
-                val userIdParam = call.parameters["userId"]?.toIntOrNull()
-                    ?: return@get call.respond(HttpStatusCode.BadRequest, "Invalid userId")
 
-                val subjectId = principal.payload.getClaim("userId").asInt()
-                if (subjectId != userIdParam) {
-                    return@get call.respond(HttpStatusCode.Forbidden, "You can only access your own notifications")
-                }
+                val idStr = authTokenService.getClaim(principal, "userId") ?: authTokenService.getClaim(principal, "sub")
+                val userId = idStr?.toIntOrNull() ?: return@get call.respond(HttpStatusCode.Unauthorized, "Invalid user ID")
 
-                val count = notificationSchema.getUnreadCount(userIdParam)
+                val count = notificationSchema.getUnreadCount(userId)
                 call.respond(HttpStatusCode.OK, mapOf("count" to count))
             }
         }

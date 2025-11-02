@@ -19,6 +19,7 @@ object NotificationSessionRegistry {
     fun hasSession(userId: Int): Boolean = sessions.containsKey(userId)
 
     suspend fun sendToUser(userId: Int, payloadJson: String): Boolean {
+        println("DEBUG: sendToUser called for user $userId")
         val session = sessions[userId] ?: return false
         return try {
             session.send(Frame.Text(payloadJson))
