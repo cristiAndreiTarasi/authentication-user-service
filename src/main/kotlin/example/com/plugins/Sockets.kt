@@ -495,7 +495,6 @@ fun Application.configureSockets(
 
     routing {
         route("/ws") {
-            // Keep /liveRoom for now (but plan to split into chat/control)
             webSocket("/liveRoom/{roomId}/{userId}") {
                 val roomId = call.parameters["roomId"]!!
                 val userId = call.parameters["userId"]!!
@@ -688,6 +687,7 @@ fun Application.configureSockets(
                     }
                 }
             }
+            // Keep /liveRoom for now (but plan to split into chat/control)
         }
     }
 }

@@ -53,7 +53,8 @@ enum class ProfileUpdateType {
 enum class SocialEventType {
     FOLLOW,
     UNFOLLOW,
-    BLOCK
+    BLOCK,
+    LIVE_STARTED
     // Add more as needed: LIKE, COMMENT, MENTION, etc.
 }
 

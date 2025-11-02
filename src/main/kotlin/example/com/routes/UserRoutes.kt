@@ -270,7 +270,10 @@ fun Route.userRoutes(
                         actorId = currentUserId,
                         type = "follow",
                         text = "${currentUser.username} started following you",
-                        meta = mapOf("followedAt" to Instant.now().toString())
+                        meta = mapOf(
+                            "followedAt" to Instant.now().toString(),
+                            "actorAvatarUrl" to "/users/fetch/${currentUserId}/avatar"
+                        )
                     )
 
                     redisService.addSocialEvent(

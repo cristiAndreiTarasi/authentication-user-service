@@ -41,6 +41,7 @@ val NotificationEventJson = Json {
             subclass(NotificationEvent.InitialState::class)
             subclass(NotificationEvent.MarkRead::class)
             subclass(NotificationEvent.ProfileUpdate::class)
+            subclass(NotificationEvent.UserIsLive::class)
         }
     }
 }

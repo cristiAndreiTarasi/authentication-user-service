@@ -176,6 +176,19 @@ class UserSchema(
         }
     }
 
+    suspend fun getFollowerIds(userId: Int): List<Int> = dbQuery { connection ->
+        connection.prepareStatement(SELECT_USER_FOLLOWERS).use { statement ->
+            statement.setInt(1, userId)
+            statement.executeQuery().use { resultSet ->
+                val followerIds = mutableListOf<Int>()
+                while (resultSet.next()) {
+                    followerIds.add(resultSet.getInt("follower_id"))
+                }
+                followerIds
+            }
+        }
+    }
+
     suspend fun getUserById(id: Int): ExposedUser? = dbQuery { connection ->
         connection.prepareStatement(SELECT_USER_BY_ID).use { statement ->
             statement.setInt(1, id)

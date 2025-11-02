@@ -304,6 +304,26 @@ private suspend fun handleOnPublish(
 
         if (marked) {
             log.info("on_publish: marked publishing for $streamKeyFromToken -> accept")
+
+            // TRIGGER LIVE NOTIFICATIONS HERE
+            try {
+                // Get user details for notification
+                val user = userSchema.findById(record.userId)
+                if (user != null) {
+                    redisManager.triggerLiveNotification(
+                        userId = record.userId,
+                        username = user.username,
+                        streamId = streamKeyFromToken
+                    )
+                    log.info("on_publish: triggered live notifications for user ${record.userId} (${user.username})")
+                } else {
+                    log.warn("on_publish: user ${record.userId} not found for live notification")
+                }
+            } catch (e: Exception) {
+                log.error("on_publish: failed to trigger live notifications", e)
+                // Don't fail the publish if notification fails
+            }
+
             return true
         }
 

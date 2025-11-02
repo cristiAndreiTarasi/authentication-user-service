@@ -111,6 +111,37 @@ class RedisService(redisUrl: String) {
         producerCommands.xadd("live_events", mapOf("event" to json))
     }
 
+    /**
+     * Trigger live notifications when a user goes live
+     */
+    fun triggerLiveNotification(userId: Int, username: String, streamId: String? = null) {
+        val event = SocialEvent(
+            type = SocialEventType.LIVE_STARTED,
+            actorId = userId.toString(),
+            actorUsername = username,
+            targetId = userId.toString(),
+            ts = Instant.now().toString(),
+            meta = mapOf(
+                "streamId" to (streamId ?: ""),
+                "timestamp" to Instant.now().toString()
+            )
+        )
+
+        val payload = json.encodeToString(SocialEvent.serializer(), event)
+
+        val map = mutableMapOf<String, String>(
+            "event" to payload,
+            "type" to event.type.name,
+            "actorId" to event.actorId,
+            "targetId" to event.targetId,
+            "ts" to event.ts
+        )
+        event.actorUsername?.let { map["actorUsername"] = it }
+
+        producerCommands.xadd(SOCIAL_STREAM, map)
+        println("DEBUG: Triggered live notification for user $userId ($username)")
+    }
+
     private val MAX_HISTORY = 100
     fun addToHistory(roomId: String, event: LiveEvent) {
         if (event is LiveEvent.ChatMessage || event is LiveEvent.SystemMessage) {

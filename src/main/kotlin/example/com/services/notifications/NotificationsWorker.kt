@@ -7,14 +7,11 @@ import example.com.routes.dtos.NotificationEvent
 import example.com.routes.dtos.withDefaults
 import example.com.schemas.NotificationSchema
 import example.com.schemas.UserSchema
-import example.com.services.redis.SocialEvent
 import example.com.services.redis.RedisService
+import example.com.services.redis.SocialEvent
 import io.lettuce.core.Consumer
-import io.lettuce.core.RedisCommandExecutionException
 import io.lettuce.core.StreamMessage
-import io.lettuce.core.XGroupCreateArgs
 import io.lettuce.core.XReadArgs
-import io.lettuce.core.RedisException
 import kotlinx.coroutines.delay
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
@@ -76,6 +73,57 @@ class NotificationWorker(
         }
     }
 
+    private suspend fun handleLiveStartedEvent(
+        event: SocialEvent,
+        actorIdInt: Int,
+        messageId: String
+    ) {
+        // Get the user who went live
+        val liveUser = userSchema.findById(actorIdInt) ?: run {
+            redisService.consumerCommands.xack(streamKey, consumerGroup, messageId)
+            return
+        }
+
+        // Get all followers of the user who went live - use userIds from TallyDto
+        val followersTally = userSchema.getUserFollowers(actorIdInt)
+        val followerIds = followersTally.userIds
+
+        val storedText = "${liveUser.username} is now live!"
+        val avatarUrl = "/users/fetch/${actorIdInt}/avatar"
+
+        // Send notifications to all followers
+        followerIds.forEach { followerId ->
+            // 1. Send Live NotificationEvent via WebSocket
+            val liveEvent = NotificationEvent.UserIsLive(
+                userId = followerId.toString(),
+                actorId = event.actorId,
+                actorUsername = liveUser.username,
+                actorAvatarUrl = avatarUrl, // Add avatar URL
+                text = storedText
+            ).withDefaults()
+
+            val eventJson = NotificationEventJson.encodeToString(liveEvent)
+            val delivered = NotificationSessionRegistry.sendToUser(followerId, eventJson)
+
+            // 2. Store in database (for offline users)
+            if (!delivered) {
+                notificationSchema.insertNotification(
+                    userId = followerId,
+                    actorId = actorIdInt,
+                    type = "user_is_live",
+                    text = storedText,
+                    meta = mapOf(
+                        "actorUsername" to liveUser.username,
+                        "actorAvatarUrl" to avatarUrl,
+                        "streamId" to (event.meta["streamId"] ?: "")
+                    )
+                )
+            }
+        }
+
+        redisService.consumerCommands.xack(streamKey, consumerGroup, messageId)
+    }
+
     private suspend fun handleFollowEvent(
         event: SocialEvent,
         actorIdInt: Int,
@@ -88,12 +136,14 @@ class NotificationWorker(
         }
 
         val storedText = "$actorUsername started following you"
+        val avatarUrl = "/users/fetch/${actorIdInt}/avatar" // Add avatar URL
 
         // 1. Send Follow NotificationEvent via WebSocket
         val followEvent = NotificationEvent.Follow(
             userId = targetIdInt.toString(),
             actorId = event.actorId,
             actorUsername = actorUsername,
+            actorAvatarUrl = avatarUrl, // Add avatar URL
             text = storedText
         ).withDefaults()
 
@@ -109,7 +159,8 @@ class NotificationWorker(
                 type = "follow",
                 text = storedText,
                 meta = mapOf(
-                    "actorUsername" to (event.actorUsername ?: "")
+                    "actorUsername" to actorUsername,
+                    "actorAvatarUrl" to avatarUrl // Store avatar URL in meta
                 )
             )
             println("DEBUG: Database storage for user $targetIdInt: $stored")
@@ -162,19 +213,33 @@ class NotificationWorker(
         val actorIdInt = event.actorId.toIntOrNull()
         val targetIdInt = event.targetId.toIntOrNull()
 
-        if (actorIdInt == null || targetIdInt == null) {
-            println("DEBUG: Invalid IDs in social event")
-            redisService.consumerCommands.xack(streamKey, consumerGroup, messageId)
-            return
-        }
-
         when (event.type) {
-            SocialEventType.FOLLOW -> handleFollowEvent(event, actorIdInt, targetIdInt, messageId)
-            SocialEventType.UNFOLLOW -> handleUnfollowEvent(event, actorIdInt, targetIdInt, messageId)
-            SocialEventType.BLOCK -> {}
+            SocialEventType.FOLLOW -> {
+                if (actorIdInt == null || targetIdInt == null) {
+                    redisService.consumerCommands.xack(streamKey, consumerGroup, messageId)
+                    return
+                }
+                handleFollowEvent(event, actorIdInt, targetIdInt, messageId)
+            }
+            SocialEventType.UNFOLLOW -> {
+                if (actorIdInt == null || targetIdInt == null) {
+                    redisService.consumerCommands.xack(streamKey, consumerGroup, messageId)
+                    return
+                }
+                handleUnfollowEvent(event, actorIdInt, targetIdInt, messageId)
+            }
+            SocialEventType.LIVE_STARTED -> {
+                if (actorIdInt == null) {
+                    redisService.consumerCommands.xack(streamKey, consumerGroup, messageId)
+                    return
+                }
+                handleLiveStartedEvent(event, actorIdInt, messageId)
+            }
+            SocialEventType.BLOCK -> {
+                // Handle block event if needed
+                redisService.consumerCommands.xack(streamKey, consumerGroup, messageId)
+            }
         }
-
-        redisService.consumerCommands.xack(streamKey, consumerGroup, messageId)
     }
 }
 
