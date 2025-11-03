@@ -47,6 +47,7 @@ val appJson = Json {
 enum class ProfileUpdateType {
     FOLLOWERS,
     FOLLOWING,
+    LIKES,
     UNREAD_COUNT
 }
 
@@ -54,8 +55,7 @@ enum class SocialEventType {
     FOLLOW,
     UNFOLLOW,
     BLOCK,
-    LIVE_STARTED
-    // Add more as needed: LIKE, COMMENT, MENTION, etc.
+    LIVE_STARTED,
 }
 
 enum class StreamStatus(val dbValue: String) {

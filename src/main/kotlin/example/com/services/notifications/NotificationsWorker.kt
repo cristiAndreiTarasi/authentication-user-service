@@ -64,6 +64,8 @@ class NotificationWorker(
                         handleSocialEvent(socialEvent, msg.id)
                     } catch (e: Exception) {
                         println("DEBUG: Error processing message ${msg.id}: ${e.message}")
+                        // ack the message to avoid getting stuck
+                        redisService.consumerCommands.xack(streamKey, consumerGroup, msg.id)
                     }
                 }
             } catch (e: Exception) {
@@ -146,15 +148,13 @@ class NotificationWorker(
         ).withDefaults()
 
         val eventJson = NotificationEventJson.encodeToString(followEvent)
-        val delivered = NotificationSessionRegistry.sendToUser(targetIdInt, eventJson)
-        println("DEBUG: WebSocket Follow event delivery to user $targetIdInt: $delivered")
+        NotificationSessionRegistry.sendToUser(targetIdInt, eventJson)
 
         // 3. Send ProfileUpdate events using enum
         sendProfileUpdate(targetIdInt, ProfileUpdateType.FOLLOWERS)
         sendProfileUpdate(actorIdInt, ProfileUpdateType.FOLLOWING)
 
         redisService.consumerCommands.xack(streamKey, consumerGroup, messageId)
-        println("DEBUG: Processed follow event for target user $targetIdInt")
     }
 
     private suspend fun handleUnfollowEvent(
@@ -172,17 +172,28 @@ class NotificationWorker(
     }
 
     private suspend fun sendProfileUpdate(userId: Int, updateType: ProfileUpdateType) {
-        // Get current count from database using type-safe when
-        val count = when (updateType) {
-            ProfileUpdateType.FOLLOWERS -> userSchema.getUserFollowers(userId).tally
-            ProfileUpdateType.FOLLOWING -> userSchema.getUserFollowing(userId).tally
-            ProfileUpdateType.UNREAD_COUNT -> notificationSchema.getUnreadCount(userId)
+        // Get current count and user lists from database
+        val (count, userIds) = when (updateType) {
+            ProfileUpdateType.FOLLOWERS -> {
+                val result = userSchema.getUserFollowers(userId)
+                result.tally to result.userIds
+            }
+            ProfileUpdateType.FOLLOWING -> {
+                val result = userSchema.getUserFollowing(userId)
+                result.tally to result.userIds
+            }
+            ProfileUpdateType.UNREAD_COUNT -> {
+                notificationSchema.getUnreadCount(userId) to null
+            }
+
+            ProfileUpdateType.LIKES -> TODO()
         }
 
         val profileEvent = NotificationEvent.ProfileUpdate(
             userId = userId.toString(),
-            updateType = updateType.name, // Use enum name for consistency
-            count = count
+            updateType = updateType,
+            count = count,
+            userIds = userIds // Include the user lists
         ).withDefaults()
 
         val eventJson = NotificationEventJson.encodeToString(profileEvent)

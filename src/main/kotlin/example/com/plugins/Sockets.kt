@@ -5,6 +5,7 @@ import example.com.ModerationMessages
 import example.com.ModerationReason
 import example.com.ModerationSeverity
 import example.com.NotificationEventJson
+import example.com.ProfileUpdateType
 import example.com.routes.dtos.LiveEvent
 import example.com.routes.dtos.NotificationEvent
 import example.com.routes.dtos.withDefaults
@@ -478,7 +479,7 @@ fun Application.configureSockets(
                     val unreadCount = notificationSchema.getUnreadCount(userId)
                     val updateEvent = NotificationEvent.ProfileUpdate(
                         userId = userId.toString(),
-                        updateType = "unread",
+                        updateType = ProfileUpdateType.UNREAD_COUNT,
                         count = unreadCount
                     ).withDefaults()
                     val json = NotificationEventJson.encodeToString(updateEvent)

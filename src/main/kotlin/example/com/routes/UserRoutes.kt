@@ -283,10 +283,9 @@ fun Route.userRoutes(
                         actorUsername = currentUser.username
                     )
                 } catch (e: Exception) {
-                    // log, but do not fail the request — DB is the source of truth
                     call.application.environment.log.error("Failed to publish social event", e)
-                    // Optionally record an outbox row for retry (see below)
                 }
+
                 call.respond(HttpStatusCode.Created)
             } else call.respond(HttpStatusCode.InternalServerError, "Failed to follow")
         }

@@ -1,7 +1,10 @@
 package example.com.routes.dtos
 
+import example.com.ProfileUpdateType
+import example.com.SocialEventType
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import java.time.Instant
 
 @Serializable
 data class NotificationDto(
@@ -64,12 +67,12 @@ sealed class NotificationEvent {
     data class ProfileUpdate(
         override val userId: String,
         override val timestamp: Long? = null,
-        val updateType: String, // "followers" or "following"
-        val count: Int
+        val updateType: ProfileUpdateType, // "followers", "following", "likes"
+        val count: Int,
+        val userIds: List<Int>? = null
     ) : NotificationEvent()
 }
 
-// Update withDefaults function
 fun NotificationEvent.withDefaults(): NotificationEvent {
     val now = System.currentTimeMillis()
     return when (this) {
