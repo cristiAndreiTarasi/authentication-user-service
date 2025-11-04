@@ -16,6 +16,15 @@ import kotlinx.coroutines.delay
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 
+/**
+* Background worker that consumes social events from Redis streams
+* and processes them into real-time notifications.
+*
+* This worker runs continuously and handles:
+* - Follow/unfollow events
+* - Live stream started notifications
+* - Profile update events
+*/
 class NotificationWorker(
     private val redisService: RedisService,
     private val notificationSchema: NotificationSchema,
@@ -26,23 +35,25 @@ class NotificationWorker(
 ) {
     private val json = Json { ignoreUnknownKeys = true }
 
+    /**
+    * Main worker loop that continuously consumes events from Redis stream.
+    */
     suspend fun run() {
-        println("DEBUG: NotificationWorker starting...")
-
-        // Create consumer group if not exists
+        // Create consumer group if it doesn't exist
         try {
             redisService.createConsumerGroupIfNotExists(streamKey, consumerGroup)
-        } catch (e: Exception) {
-            println("DEBUG: Error creating consumer group: ${e.message}")
+        } catch (_: Exception) {
         }
 
+        // Main consumption loop
         while (true) {
             try {
+                // Read messages from Redis stream with 5 second block
                 val messages: List<StreamMessage<String, String>> =
                     redisService.consumerCommands.xreadgroup(
                         Consumer.from(consumerGroup, consumerId),
                         XReadArgs.Builder.block(5000).count(100),
-                        XReadArgs.StreamOffset.from(streamKey, ">")
+                        XReadArgs.StreamOffset.from(streamKey, ">") // ">" means new messages only
                     )
 
                 if (messages.isEmpty()) {
@@ -50,11 +61,11 @@ class NotificationWorker(
                     continue
                 }
 
-                println("DEBUG: NotificationWorker processing ${messages.size} messages")
-
+                // Process each message
                 for (msg in messages) {
                     val raw = msg.body["event"]
                     if (raw == null) {
+                        // Acknowledge invalid messages to avoid reprocessing
                         redisService.consumerCommands.xack(streamKey, consumerGroup, msg.id)
                         continue
                     }
@@ -63,8 +74,7 @@ class NotificationWorker(
                         val socialEvent = json.decodeFromString(SocialEvent.serializer(), raw)
                         handleSocialEvent(socialEvent, msg.id)
                     } catch (e: Exception) {
-                        println("DEBUG: Error processing message ${msg.id}: ${e.message}")
-                        // ack the message to avoid getting stuck
+                        // Acknowledge problematic messages to avoid getting stuck
                         redisService.consumerCommands.xack(streamKey, consumerGroup, msg.id)
                     }
                 }
@@ -75,6 +85,9 @@ class NotificationWorker(
         }
     }
 
+    /**
+    * Handles live started events - notifies all followers when a user goes live.
+    */
     private suspend fun handleLiveStartedEvent(
         event: SocialEvent,
         actorIdInt: Int,
@@ -95,7 +108,7 @@ class NotificationWorker(
 
         // Send notifications to all followers
         followerIds.forEach { followerId ->
-            // 1. ALWAYS Store in database
+            // Store notification in database for persistence
             val stored = notificationSchema.insertNotification(
                 userId = followerId,
                 actorId = actorIdInt,
@@ -108,7 +121,7 @@ class NotificationWorker(
                 )
             )
 
-            // 2. Send Live NotificationEvent via WebSocket
+            // Send real-time notification via WebSocket
             val liveEvent = NotificationEvent.UserIsLive(
                 userId = followerId.toString(),
                 actorId = event.actorId,
@@ -118,12 +131,16 @@ class NotificationWorker(
             ).withDefaults()
 
             val eventJson = NotificationEventJson.encodeToString(liveEvent)
-            val delivered = NotificationSessionRegistry.sendToUser(followerId, eventJson)
+            NotificationSessionRegistry.sendToUser(followerId, eventJson)
         }
 
+        // Acknowledge message after processing
         redisService.consumerCommands.xack(streamKey, consumerGroup, messageId)
     }
 
+    /**
+    * Handles follow events - notifies the target user and updates follower counts.
+    */
     private suspend fun handleFollowEvent(
         event: SocialEvent,
         actorIdInt: Int,
@@ -138,7 +155,7 @@ class NotificationWorker(
         val storedText = "$actorUsername started following you"
         val avatarUrl = "/users/fetch/${actorIdInt}/avatar"
 
-        // 2. Send Follow NotificationEvent via WebSocket (for real-time)
+        // Send real-time follow notification
         val followEvent = NotificationEvent.Follow(
             userId = targetIdInt.toString(),
             actorId = event.actorId,
@@ -150,13 +167,16 @@ class NotificationWorker(
         val eventJson = NotificationEventJson.encodeToString(followEvent)
         NotificationSessionRegistry.sendToUser(targetIdInt, eventJson)
 
-        // 3. Send ProfileUpdate events using enum
+        // Send profile updates to both users
         sendProfileUpdate(targetIdInt, ProfileUpdateType.FOLLOWERS)
         sendProfileUpdate(actorIdInt, ProfileUpdateType.FOLLOWING)
 
         redisService.consumerCommands.xack(streamKey, consumerGroup, messageId)
     }
 
+    /**
+    * Handles unfollow events - updates follower counts for both users.
+    */
     private suspend fun handleUnfollowEvent(
         event: SocialEvent,
         actorIdInt: Int,
@@ -171,6 +191,9 @@ class NotificationWorker(
         redisService.consumerCommands.xack(streamKey, consumerGroup, messageId)
     }
 
+    /**
+    * Sends profile update events to users (followers count, following count, unread count).
+    */
     private suspend fun sendProfileUpdate(userId: Int, updateType: ProfileUpdateType) {
         // Get current count and user lists from database
         val (count, userIds) = when (updateType) {
@@ -197,12 +220,12 @@ class NotificationWorker(
         ).withDefaults()
 
         val eventJson = NotificationEventJson.encodeToString(profileEvent)
-        val sent = NotificationSessionRegistry.sendToUser(userId, eventJson)
-        if (sent) {
-            println("DEBUG: Sent profile update to user $userId: $updateType = $count")
-        }
+        NotificationSessionRegistry.sendToUser(userId, eventJson)
     }
 
+    /**
+    * Main event router - dispatches social events to appropriate handlers.
+    */
     private suspend fun handleSocialEvent(event: SocialEvent, messageId: String) {
         val actorIdInt = event.actorId.toIntOrNull()
         val targetIdInt = event.targetId.toIntOrNull()

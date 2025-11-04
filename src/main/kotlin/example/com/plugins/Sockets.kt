@@ -37,6 +37,14 @@ import kotlinx.serialization.PolymorphicSerializer
 import kotlinx.serialization.encodeToString
 import java.time.Duration
 
+/**
+* Configures WebSocket endpoints for live streaming rooms and notifications.
+*
+* @param redisService Redis service for event streaming and persistence
+* @param userSchema Database access for user data
+* @param notificationSchema Database access for notification data
+* @param authTokenService Service for JWT authentication
+*/
 fun Application.configureSockets(
     redisService: RedisService,
     userSchema: UserSchema,
@@ -50,9 +58,16 @@ fun Application.configureSockets(
         masking      = false
     }
 
+    // Create polymorphic serializers for event types
     val liveEventPolymorphic = PolymorphicSerializer(LiveEvent::class)
     val notificationEventPolymorphic = PolymorphicSerializer(NotificationEvent::class)
 
+    /**
+    * Updates and broadcasts stream statistics (viewer count, total likes) for a room.
+    *
+    * @param roomId The room ID to update stats for
+    * @param redisManager Redis service for storing and broadcasting stats
+    */
     fun updateStreamStats(roomId: String, redisManager: RedisService) {
         val viewerCount = SessionManager.getRoomSessions(roomId).size
         val totalLikes = redisManager.getCounter("room:$roomId:likes") ?: 0
@@ -67,11 +82,19 @@ fun Application.configureSockets(
         redisManager.addToStream(event)
     }
 
+    /**
+    * Kicks a user from a room by closing their WebSocket connection and broadcasting the event.
+    *
+    * @param roomId The room from which to kick the user
+    * @param targetUserId The ID of the user to kick
+    */
     suspend fun kickUser(roomId: String, targetUserId: String) {
+        // Update permission manager to mark user as kicked
         PermissionManager.kickUser(roomId, targetUserId)
 
         val username = SessionManager.getSessionInfo(roomId, targetUserId)?.username ?: "User"
 
+        // Find and close the user's WebSocket session
         SessionManager.getSession(roomId, targetUserId)?.let { session ->
             try {
                 val kickUserEvent = LiveEvent.KickUser(
@@ -81,6 +104,7 @@ fun Application.configureSockets(
                     timestamp = System.currentTimeMillis()
                 )
 
+                // Send kick event to the user before closing connection
                 val json = LiveEventJson.encodeToString(liveEventPolymorphic, kickUserEvent.withDefaults())
                 session.send(Frame.Text(json))
                 session.close(CloseReason(CloseReason.Codes.VIOLATED_POLICY, "kicked"))
@@ -92,6 +116,7 @@ fun Application.configureSockets(
             }
         }
 
+        // Broadcast system message about the kick
         redisService.addToStream(
             LiveEvent.SystemMessage(
                 roomId = roomId,
@@ -101,6 +126,10 @@ fun Application.configureSockets(
         )
     }
 
+    /**
+    * Sends stream owner information to a specific WebSocket session.
+    * Used when a new viewer joins to show who is streaming.
+    */
     suspend fun sendStreamOwnerInfo(
         roomId: String,
         session: WebSocketSession,
@@ -129,11 +158,17 @@ fun Application.configureSockets(
         }
     }
 
+    /**
+     * Broadcasts stream ended event to all connected clients.
+     */
     fun sendStreamEndedEvent(roomId: String) {
         val event = LiveEvent.StreamEndedEvent(roomId = roomId)
         redisService.addToStream(event)
     }
 
+    /**
+     * Sends initial room state (viewer count, likes) to a newly connected client.
+     */
     suspend fun sendInitialState(
         roomId: String,
         session: WebSocketSession,
@@ -152,6 +187,10 @@ fun Application.configureSockets(
         session.send(Frame.Text(json))
     }
 
+    /**
+    * Broadcasts stream owner information to all clients in a room.
+    * Used when stream owner changes or on room initialization.
+    */
     suspend fun broadcastStreamOwnerInfo(
         roomId: String,
         userSchema: UserSchema
@@ -188,6 +227,9 @@ fun Application.configureSockets(
         }
     }
 
+    /**
+    * Sends a system message to all clients in a room.
+    */
     suspend fun sendSystemMessage(
         roomId: String,
         text: String,
@@ -201,6 +243,12 @@ fun Application.configureSockets(
         redisManager.addToStream(event)
     }
 
+    /**
+    * Main handler for live room events. Processes different types of events
+    * and applies appropriate business logic and permissions.
+    *
+    * Events flow: Client → WebSocket → handleLiveRoomEvent → Redis Stream → All Clients
+    */
     suspend fun handleLiveRoomEvent(
         event: LiveEvent,
         userId: String,
@@ -256,6 +304,7 @@ fun Application.configureSockets(
             }
 
             is LiveEvent.GrantModerator -> {
+                // Only stream owners can manage moderators
                 if (PermissionManager.isStreamOwner(roomId, userId)) {
                     PermissionManager.grantModerator(roomId, event.targetUserId)
                     redisManager.addToStream(event)
@@ -263,6 +312,7 @@ fun Application.configureSockets(
             }
 
             is LiveEvent.RevokeModerator -> {
+                // Only stream owners can manage moderators
                 if (PermissionManager.isStreamOwner(roomId, userId)) {
                     PermissionManager.revokeModerator(roomId, event.targetUserId)
                     redisManager.addToStream(event)
@@ -270,9 +320,11 @@ fun Application.configureSockets(
             }
 
             is LiveEvent.Like -> {
+                // Increment room and user like counters
                 redisManager.incrementCounter("room:$roomId:likes", event.count.toLong())
                 val userTotal = redisManager.incrementUserLikeCount(roomId, userId, event.count.toLong())
 
+                // Send milestone messages for user like counts
                 if (userTotal == 1L || userTotal % 100 == 0L) {
                     val sessionInfo = SessionManager.getSessionInfo(roomId, userId)
                     val username = sessionInfo?.username ?: "A viewer"
@@ -289,11 +341,13 @@ fun Application.configureSockets(
             }
 
             is LiveEvent.Gift -> {
+                // Track gift counts by gift type
                 redisManager.incrementCounter("room:$roomId:gifts:${event.giftId}", event.quantity.toLong())
                 redisManager.addToStream(event)
             }
 
             is LiveEvent.JoinRoom -> {
+                // First user to join becomes stream owner
                 if (!PermissionManager.hasStreamOwner(roomId)) {
                     val user = userSchema.findById(userId.toInt())
                     PermissionManager.setStreamOwner(
@@ -317,6 +371,7 @@ fun Application.configureSockets(
             }
 
             is LiveEvent.LeaveRoom -> {
+                // Update stats when user leaves
                 val session = SessionManager.getSession(roomId, userId)
                 val username = session?.let { SessionManager.getUsername(it) } ?: "User"
 
@@ -343,6 +398,7 @@ fun Application.configureSockets(
             }
 
             is LiveEvent.ModerationWarningEvent -> {
+                // Broadcast moderation warnings with user-specific messages
                 val sessions = SessionManager.getRoomSessions(roomId)
                 val streamOwnerId = PermissionManager.getStreamOwner(roomId)
 
@@ -351,6 +407,7 @@ fun Application.configureSockets(
                         val sessionUserId = SessionManager.getUserId(session)
                         val isStreamer = sessionUserId == streamOwnerId
 
+                        // Customize message based on user role and severity
                         val reason = try {
                             ModerationReason.valueOf(event.reason.uppercase())
                         } catch (e: Exception) { ModerationReason.OTHER }
@@ -358,7 +415,7 @@ fun Application.configureSockets(
                             ModerationSeverity.valueOf(event.severity.uppercase())
                         } catch (e: Exception) { ModerationSeverity.WARNING }
 
-                        // For streamers, show streamer-specific messages
+                        // Different messages for streamer vs viewers
                         val finalMessage = if (isStreamer) {
                             ModerationMessages.getStreamerWarningMessage(severity, reason)
                         } else {
@@ -439,30 +496,13 @@ fun Application.configureSockets(
                     }
                 }
             }
-
-            is LiveEvent.ModerationBlockAudioEvent -> {
-                // Persist user-facing message variations if needed
-                val sessions = SessionManager.getRoomSessions(roomId)
-                val streamOwnerId = PermissionManager.getStreamOwner(roomId)
-
-                sessions.forEach { session ->
-                    try {
-                        val sessionUserId = SessionManager.getUserId(session)
-                        val isStreamer = sessionUserId == streamOwnerId
-
-                        val json = LiveEventJson.encodeToString(liveEventPolymorphic, event.withDefaults())
-                        session.send(Frame.Text(json))
-                    } catch (e: Exception) {
-                        // ignore send failures for individual sessions
-                    }
-                }
-
-                // Also add the event back to stream history if you want clients who connect later to see it:
-                redisManager.addToHistory(roomId, event)
-            }
         }
     }
 
+    /**
+    * Handles notification events from client WebSocket connections.
+    * Processes mark-read events and sends updated counts to users.
+    */
     suspend fun handleNotificationEvent(
         event: NotificationEvent,
         userId: Int,
@@ -470,7 +510,7 @@ fun Application.configureSockets(
     ) {
         when (event) {
             is NotificationEvent.MarkRead -> {
-                // Mark notification as read
+                // Mark notification as read in database
                 val success = notificationSchema.markAsRead(userId, event.notificationId)
                 if (success) {
                     println("DEBUG: User $userId marked notification ${event.notificationId} as read")
@@ -496,6 +536,12 @@ fun Application.configureSockets(
 
     routing {
         route("/ws") {
+            /**
+            * WebSocket endpoint for live streaming rooms.
+            * Handles real-time events like chat, likes, moderation, etc.
+            *
+            * Path: /ws/liveRoom/{roomId}/{userId}
+            */
             webSocket("/liveRoom/{roomId}/{userId}") {
                 val roomId = call.parameters["roomId"]!!
                 val userId = call.parameters["userId"]!!
@@ -613,7 +659,12 @@ fun Application.configureSockets(
             }
 
             authenticate("auth-jwt") {
-                // Rename /notifications to /social and prepare for additional event types
+                /**
+                * Authenticated WebSocket endpoint for user notifications.
+                * Requires JWT authentication and handles real-time notifications.
+                *
+                * Path: /ws/notifications (authenticated)
+                */
                 webSocket("/notifications") {
                     val principal = call.principal<JWTPrincipal>() ?: run {
                         println("DEBUG: No JWT principal found")

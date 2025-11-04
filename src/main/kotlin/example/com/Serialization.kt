@@ -5,12 +5,16 @@ import example.com.routes.dtos.NotificationEvent
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.modules.*
 
+/**
+ * JSON configuration for serializing/deserializing LiveEvent objects.
+ * Uses polymorphic serialization to handle different types of live streaming events.
+ */
 val LiveEventJson = Json {
-    ignoreUnknownKeys = true
-    classDiscriminator = "type"
+    ignoreUnknownKeys = true // Ignore unknown fields for forward compatibility
+    classDiscriminator = "type" // Use "type" field to distinguish between event types
     serializersModule = SerializersModule {
         polymorphic(LiveEvent::class) {
-            // Register ALL LiveEvent subclasses
+            // Register ALL LiveEvent subclasses for polymorphic serialization
             subclass(LiveEvent.JoinRoom::class)
             subclass(LiveEvent.LeaveRoom::class)
             subclass(LiveEvent.ChatMessage::class)
@@ -32,6 +36,10 @@ val LiveEventJson = Json {
     }
 }
 
+/**
+ * JSON configuration for serializing/deserializing NotificationEvent objects.
+ * Handles different types of user notification events.
+ */
 val NotificationEventJson = Json {
     ignoreUnknownKeys = true
     classDiscriminator = "type"
