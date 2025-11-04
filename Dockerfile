@@ -11,7 +11,7 @@ WORKDIR /home/gradle/src
 RUN gradle buildFatJar --no-daemon
 
 # Use the official OpenJDK 19 slim image as the base image for the runtime stage
-FROM openjdk:19-jdk-slim
+FROM eclipse-temurin:19-jdk
 
 # Expose port 8081 on the container
 EXPOSE 8082

@@ -54,7 +54,7 @@ fun Route.srsHttpHookRoutes(
     redisService: RedisService,
     moderationPublishSecret: String
 ) {
-    route("/api/v1/streams") {
+    route("/v1/streams") {
         // single POST endpoint — origin will call this
         post {
             val payload = try { call.receive<SrsHookPayload>() } catch (e: Exception) {
