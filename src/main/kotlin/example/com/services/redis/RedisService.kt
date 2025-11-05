@@ -103,7 +103,7 @@ class RedisService(redisUrl: String) {
         producerCommands.xadd(SOCIAL_STREAM, map)
     }
 
-    / /**
+    /**
      * Creates a consumer group for a stream if it doesn't exist.
      */
     fun createConsumerGroupIfNotExists(streamKey: String, group: String) {

@@ -16,6 +16,7 @@ import example.com.services.redis.RedisService
 import example.com.services.token.TokenService
 import example.com.services.ws_session.PermissionManager
 import example.com.services.ws_session.SessionManager
+import example.com.services.ws_session.WebSocketAuthHelper
 import io.ktor.server.application.Application
 import io.ktor.server.application.install
 import io.ktor.server.auth.authenticate
@@ -536,129 +537,138 @@ fun Application.configureSockets(
 
     routing {
         route("/ws") {
-            /**
-            * WebSocket endpoint for live streaming rooms.
-            * Handles real-time events like chat, likes, moderation, etc.
-            *
-            * Path: /ws/liveRoom/{roomId}/{userId}
-            */
-            webSocket("/liveRoom/{roomId}/{userId}") {
-                val roomId = call.parameters["roomId"]!!
-                val userId = call.parameters["userId"]!!
-                val user = userSchema.findById(userId.toInt())
-                val username = user?.username ?: "Unknown"
+            authenticate("auth-jwt") {
+                /**
+                 * WebSocket endpoint for live streaming rooms.
+                 * Handles real-time events like chat, likes, moderation, etc.
+                 *
+                 * Path: /ws/liveRoom/{roomId}/{userId}
+                 */
+                webSocket("/liveRoom/{roomId}") {
+                    println("DEBUG: WebSocket connection attempt for room: ${call.parameters["roomId"]}")
 
-                // Check if session already exists and remove it first
-                SessionManager.getSession(roomId, userId)?.let { existingSession ->
-                    try {
-                        existingSession.close(CloseReason(CloseReason.Codes.NORMAL, "Reconnecting"))
-                    } catch (e: Exception) {
-                        // Ignore
-                    } finally {
-                        SessionManager.removeSession(existingSession)
-                    }
-                }
+                    val userId = WebSocketAuthHelper.authenticateUser(
+                        call,
+                        this,
+                        authTokenService
+                    ) ?: return@webSocket
 
-                // Check if user is kicked
-                if (PermissionManager.isKicked(roomId, userId)) {
-                    close(CloseReason(CloseReason.Codes.VIOLATED_POLICY, "kicked"))
-                    return@webSocket
-                }
+                    val roomId = call.parameters["roomId"]!!
+                    val user = userSchema.findById(userId.toInt())
+                    val username = user?.username ?: "Unknown"
 
-                // Register session
-                SessionManager.addSession(roomId, userId, username, this)
+                    println("DEBUG: User $userId ($username) authenticated for room $roomId")
 
-                try {
-                    // Send chat history first
-                    val history = redisService.getRoomHistory(roomId)
-                    history.forEach { event ->
-                        val json =
-                            LiveEventJson.encodeToString(liveEventPolymorphic, event.withDefaults())
-                        send(Frame.Text(json))
-                    }
-
-                    // Send initial state
-                    sendInitialState(roomId, this, redisService)
-
-                    // Send stream owner info if available
-                    sendStreamOwnerInfo(roomId, this, userSchema)
-
-                    // Handle join event
-                    val joinEvent = LiveEvent.JoinRoom(
-                        roomId = roomId,
-                        initiatorId = userId,
-                        username = username,
-                        timestamp = System.currentTimeMillis()
-                    )
-                    handleLiveRoomEvent(joinEvent, userId, roomId, redisService)
-
-                    // Listen for incoming messages
-                    for (frame in incoming) {
-                        when (frame) {
-                            is Frame.Text -> {
-                                // Use LiveEventJson for decoding
-                                val event =
-                                    LiveEventJson.decodeFromString<LiveEvent>(frame.readText())
-                                handleLiveRoomEvent(event, userId, roomId, redisService)
-                            }
-
-                            else -> {}
+                    // Check if session already exists and remove it first
+                    SessionManager.getSession(roomId, userId)?.let { existingSession ->
+                        try {
+                            existingSession.close(CloseReason(CloseReason.Codes.NORMAL, "Reconnecting"))
+                        } catch (e: Exception) {
+                            // Ignore
+                        } finally {
+                            SessionManager.removeSession(existingSession)
                         }
                     }
-                } finally {
-                    // Remove session first for accurate count
-                    SessionManager.removeSession(this)
 
-                    // Handle leave event
-                    handleLiveRoomEvent(
-                        LiveEvent.LeaveRoom(
+                    // Check if user is kicked
+                    if (PermissionManager.isKicked(roomId, userId)) {
+                        close(CloseReason(CloseReason.Codes.VIOLATED_POLICY, "kicked"))
+                        return@webSocket
+                    }
+
+                    // Register session
+                    SessionManager.addSession(roomId, userId, username, this)
+
+                    try {
+                        // Send chat history first
+                        val history = redisService.getRoomHistory(roomId)
+                        history.forEach { event ->
+                            val json =
+                                LiveEventJson.encodeToString(liveEventPolymorphic, event.withDefaults())
+                            send(Frame.Text(json))
+                        }
+
+                        // Send initial state
+                        sendInitialState(roomId, this, redisService)
+
+                        // Send stream owner info if available
+                        sendStreamOwnerInfo(roomId, this, userSchema)
+
+                        // Handle join event
+                        val joinEvent = LiveEvent.JoinRoom(
                             roomId = roomId,
                             initiatorId = userId,
                             username = username,
                             timestamp = System.currentTimeMillis()
-                        ),
-                        userId,
-                        roomId,
-                        redisService
-                    )
+                        )
+                        handleLiveRoomEvent(joinEvent, userId, roomId, redisService)
 
-                    // Check if stream owner is leaving
-                    if (PermissionManager.isStreamOwner(roomId, userId)) {
-                        val endEvent = LiveEvent.StreamEndedEvent(roomId = roomId)
-                        redisService.addToStream(endEvent)
+                        // Listen for incoming messages
+                        for (frame in incoming) {
+                            when (frame) {
+                                is Frame.Text -> {
+                                    // Use LiveEventJson for decoding
+                                    val event =
+                                        LiveEventJson.decodeFromString<LiveEvent>(frame.readText())
+                                    handleLiveRoomEvent(event, userId, roomId, redisService)
+                                }
 
-                        delay(200L)
+                                else -> {}
+                            }
+                        }
+                    } finally {
+                        // Remove session first for accurate count
+                        SessionManager.removeSession(this)
 
-                        SessionManager.getRoomSessions(roomId).forEach { session ->
-                            try {
-                                session.close(
-                                    CloseReason(
-                                        CloseReason.Codes.GOING_AWAY,
-                                        "Stream ended"
+                        // Handle leave event
+                        handleLiveRoomEvent(
+                            LiveEvent.LeaveRoom(
+                                roomId = roomId,
+                                initiatorId = userId,
+                                username = username,
+                                timestamp = System.currentTimeMillis()
+                            ),
+                            userId,
+                            roomId,
+                            redisService
+                        )
+
+                        // Check if stream owner is leaving
+                        if (PermissionManager.isStreamOwner(roomId, userId)) {
+                            val endEvent = LiveEvent.StreamEndedEvent(roomId = roomId)
+                            redisService.addToStream(endEvent)
+
+                            delay(200L)
+
+                            SessionManager.getRoomSessions(roomId).forEach { session ->
+                                try {
+                                    session.close(
+                                        CloseReason(
+                                            CloseReason.Codes.GOING_AWAY,
+                                            "Stream ended"
+                                        )
                                     )
-                                )
-                            } catch (e: Exception) {
-                                // ignore
+                                } catch (e: Exception) {
+                                    // ignore
+                                }
+
+                                SessionManager.removeSession(session)
                             }
 
-                            SessionManager.removeSession(session)
-                        }
-
-                        // Clean up room state
-                        PermissionManager.removeRoom(roomId)
-                        redisService.deleteCounters(roomId)
-                    } else {
-                        // Only clean up if room is empty
-                        if (SessionManager.getRoomSessions(roomId).isEmpty()) {
+                            // Clean up room state
                             PermissionManager.removeRoom(roomId)
                             redisService.deleteCounters(roomId)
-                            sendStreamEndedEvent(roomId)
+                        } else {
+                            // Only clean up if room is empty
+                            if (SessionManager.getRoomSessions(roomId).isEmpty()) {
+                                PermissionManager.removeRoom(roomId)
+                                redisService.deleteCounters(roomId)
+                                sendStreamEndedEvent(roomId)
+                            }
                         }
                     }
                 }
-            }
 
-            authenticate("auth-jwt") {
                 /**
                 * Authenticated WebSocket endpoint for user notifications.
                 * Requires JWT authentication and handles real-time notifications.
@@ -666,24 +676,11 @@ fun Application.configureSockets(
                 * Path: /ws/notifications (authenticated)
                 */
                 webSocket("/notifications") {
-                    val principal = call.principal<JWTPrincipal>() ?: run {
-                        println("DEBUG: No JWT principal found")
-                        close(CloseReason(CloseReason.Codes.VIOLATED_POLICY, "Unauthenticated"))
-                        return@webSocket
-                    }
-
-                    val idStr =
-                        authTokenService.getClaim(principal, "userId") ?: authTokenService.getClaim(
-                            principal,
-                            "sub"
-                        )
-                    val userId = idStr?.toIntOrNull() ?: run {
-                        println("DEBUG: Invalid user id: $idStr")
-                        close(CloseReason(CloseReason.Codes.VIOLATED_POLICY, "Invalid user id"))
-                        return@webSocket
-                    }
-
-                    println("DEBUG: WebSocket connected for user $userId")
+                    val userId = WebSocketAuthHelper.authenticateUser(
+                        call,
+                        this,
+                        authTokenService
+                    )?.toInt() ?: return@webSocket
 
                     // Register session
                     NotificationSessionRegistry.register(userId, this)
@@ -739,7 +736,6 @@ fun Application.configureSockets(
                     }
                 }
             }
-            // Keep /liveRoom for now (but plan to split into chat/control)
         }
     }
 }

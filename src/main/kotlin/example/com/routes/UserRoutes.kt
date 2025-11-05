@@ -92,7 +92,7 @@ fun Route.userRoutes(
                 LiveUserDto(
                     id = u.id!!,
                     username = u.username,
-                    avatarPath = "/users/fetch/${u.id}/avatar"
+                    avatarPath = "/api/users/fetch/${u.id}/avatar"
                 )
             }
             call.respond(HttpStatusCode.OK, dtos)
@@ -272,7 +272,7 @@ fun Route.userRoutes(
                         text = "${currentUser.username} started following you",
                         meta = mapOf(
                             "followedAt" to Instant.now().toString(),
-                            "actorAvatarUrl" to "/users/fetch/${currentUserId}/avatar"
+                            "actorAvatarUrl" to "/api/users/fetch/${currentUserId}/avatar"
                         )
                     )
 

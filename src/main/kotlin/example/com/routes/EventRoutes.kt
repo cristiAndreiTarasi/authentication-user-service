@@ -75,13 +75,13 @@ fun Route.eventRoutes(
                         userId = event.userId,
                         username = event.username,
                         userOccupation = user?.occupation,
-                        userAvatarUrl = "/users/fetch/${event.userId}/avatar",
+                        userAvatarUrl = "/api/users/fetch/${event.userId}/avatar",
                         privacyType = event.privacyType,
                         ticketPriceCents = event.ticketPriceCents,
                         categories = event.categories ?: emptyList(),
                         tags = event.tags ?: emptyList(),
                         thumbnailId = event.thumbnailId,
-                        thumbnailUrl = "/events/${event.id}/thumbnail",
+                        thumbnailUrl = "/api/events/${event.id}/thumbnail",
                         startsAt = event.startsAt,
                         status = event.status,
                         createdAt = event.createdAt,
@@ -124,7 +124,7 @@ fun Route.eventRoutes(
                     id = eventSummary.id,
                     userId = eventSummary.userId,
                     username = eventSummary.username,
-                    userAvatarUrl = "/users/fetch/${eventSummary.userId}/avatar",
+                    userAvatarUrl = "/api/users/fetch/${eventSummary.userId}/avatar",
                     startsAt = eventSummary.startsAt?.toString()
                 )
             }
@@ -267,7 +267,7 @@ fun Route.eventRoutes(
                         id = s.id,
                         userId = s.userId,
                         username = s.username ?: "Unknown",
-                        userAvatarUrl = "/users/fetch/${s.userId}/avatar", // relative
+                        userAvatarUrl = "/api/users/fetch/${s.userId}/avatar", // relative
                         startsAt = s.startsAt?.toString()
                     )
                 }

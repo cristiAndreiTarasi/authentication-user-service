@@ -90,7 +90,7 @@ fun Route.streamRoutes(
             // Map to lightweight DTO
             val summaries = streams.map { s ->
                 val id = s.id ?: return@map null // defensive: skip if null
-                val thumbnailPath = s.thumbnailId?.let { "/streams/$id/thumbnail" }
+                val thumbnailPath = s.thumbnailId?.let { "/api/streams/$id/thumbnail" }
                 StreamSummaryDto(
                     id = id,
                     title = s.title,
