@@ -17,19 +17,27 @@ import example.com.schemas.TokenSchema
 import example.com.schemas.UserSchema
 import example.com.services.gridfs.GridFSService
 import example.com.services.hashing.HashingService
-import example.com.services.notifications.NotificationWorker
 import example.com.services.redis.RedisService
 import example.com.services.role.RoleService
 import example.com.services.token.TokenConfig
 import example.com.services.token.TokenService
+import example.com.services.ws_session.CrossInstanceBroadcaster
+import example.com.services.ws_session.DistributedPermissionManager
+import example.com.services.ws_session.DistributedSessionManager
 import example.com.services.ws_session.PermissionManager
+import io.ktor.http.HttpStatusCode
 import io.ktor.server.application.Application
 import io.ktor.server.application.ApplicationStopping
+import io.ktor.server.application.call
 import io.ktor.server.netty.EngineMain
+import io.ktor.server.response.respond
+import io.ktor.server.routing.get
+import io.ktor.server.routing.routing
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import org.litote.kmongo.KMongo
 import java.time.Duration
+import java.util.UUID
 import javax.sql.DataSource
 
 fun main(args: Array<String>): Unit = EngineMain.main(args)
@@ -80,6 +88,14 @@ fun Application.module() {
     val port = environment.config.property("db.redis.port").getString()
     val redisService = RedisService("redis://$host:$port")
 
+    // Generate unique instance ID for distributed tracking
+    val instanceId = System.getenv("HOSTNAME") ?: "instance-${UUID.randomUUID().toString().take(8)}"
+
+    // Initialize distributed managers at application level
+    val distributedSessionManager = DistributedSessionManager(redisService, instanceId)
+    val distributedPermissionManager = DistributedPermissionManager(redisService)
+    val crossInstanceBroadcaster = CrossInstanceBroadcaster(redisService, instanceId)
+
     //moderation
     val moderationPublishSecret = environment.config.property("jwt.moderation.publishSecret").getString()
 
@@ -97,21 +113,17 @@ fun Application.module() {
     val eventSchema = EventSchema(dataSource, categorySchema, tagSchema)
 
     val notificationSchema = NotificationSchema(dataSource)
-    val notificationWorker = NotificationWorker(redisService, notificationSchema, userSchema)
 
-    launch {
-        // Start Redis consumer in background
-        println("🚀 Starting Redis consumeEvents worker...")
-        redisService.consumeEvents("live-group")
-    }
+    // initialize all distributed services
+    val serviceManager = ServiceManager(
+        redisService = redisService,
+        userSchema = userSchema,
+        notificationSchema = notificationSchema,
+        authTokenService = authTokenService
+    )
 
-    launch {
-        // Start notification worker in background
-        println("🚀 Starting NotificationWorker...")
-        notificationWorker.run()
-    }
-
-    println("✅ Both background workers started successfully")
+    // Start all background services
+    serviceManager.startAllServices()
 
     configureSecurity(authTokenConfig)
     configureSerialization(appJson)
@@ -121,28 +133,45 @@ fun Application.module() {
         userSchema,
         notificationSchema,
         authTokenService,
+        serviceManager
     )
     configureRouting(
         userSchema, tokenSchema, streamSchema,
         eventSchema, tagSchema, categorySchema,
         hashingService, dataSource, gridFsService,
         httpClient, authTokenService, publishTokenService,
-        redisService, moderationPublishSecret, notificationSchema
+        redisService, moderationPublishSecret, notificationSchema,
     )
 
-    val cleanupJob = launch {
-        while (true) {
-            // Run every 6 hours
-            delay(Duration.ofHours(6).toMillis())
+    // Health check endpoint for monitoring
+    routing {
+        get("/health") {
+            val health = serviceManager.healthCheck()
+            if (health.all { it.value }) {
+                call.respond(HttpStatusCode.OK, health)
+            } else {
+                call.respond(HttpStatusCode.ServiceUnavailable, health)
+            }
+        }
 
-            // Trigger cleanup
-            PermissionManager.cleanupOldRooms()
+        get("/health/instance") {
+            call.respond(mapOf("instanceId" to serviceManager.instanceId))
+        }
+
+        get("/health/redis") {
+            val redisInfo = mapOf(
+                "connected" to (redisService.producerCommands.ping() == "PONG"),
+                "instanceId" to serviceManager.instanceId
+            )
+            call.respond(redisInfo)
         }
     }
 
     // Graceful shutdown handling
     environment.monitor.subscribe(ApplicationStopping) {
-        cleanupJob.cancel() // Stop job when server stops
+        println("🛑 Application stopping - cleaning up resources...")
+
+        serviceManager.stopAllServices()
         redisService.close()
         httpClient.close()
 
@@ -150,5 +179,7 @@ fun Application.module() {
         try {
             (dataSource as? HikariDataSource)?.close()
         } catch (_: Throwable) {}
+
+        println("✅ Cleanup completed")
     }
 }

@@ -2,7 +2,6 @@ package example.com.services.ws_session
 
 import java.util.concurrent.ConcurrentHashMap
 
-// PermissionManager.kt
 object PermissionManager {
     private val streamOwners = ConcurrentHashMap<String, String>()
     private val streamOwnerInfo = ConcurrentHashMap<String, Pair<String, String?>>()

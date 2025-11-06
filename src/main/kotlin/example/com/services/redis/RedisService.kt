@@ -4,6 +4,7 @@ import example.com.LiveEventJson
 import example.com.SocialEventType
 import example.com.routes.dtos.LiveEvent
 import example.com.routes.dtos.withDefaults
+import example.com.services.ws_session.CrossInstanceBroadcaster
 import example.com.services.ws_session.SessionManager
 import io.ktor.websocket.Frame
 import io.lettuce.core.Consumer
@@ -259,7 +260,10 @@ class RedisService(redisUrl: String) {
      * Main consumer loop for live events - broadcasts events to WebSocket sessions.
      * This runs in a separate coroutine to continuously process events.
      */
-    suspend fun consumeEvents(consumerGroup: String) {
+    suspend fun consumeEvents(
+        consumerGroup: String,
+        crossInstanceBroadcaster: CrossInstanceBroadcaster
+    ) {
         val streamKey = "live_events"
 
         // Create the consumer group if it doesn't exist
@@ -300,7 +304,7 @@ class RedisService(redisUrl: String) {
                     try {
                         val event = LiveEventJson.decodeFromString<LiveEvent>(json)
                         println("consumeEvents: decoded eventType=${event::class.simpleName} roomId=${event.roomId}")
-                        broadcastToRoom(event.roomId, event)
+                        crossInstanceBroadcaster.broadcastToRoom(event.roomId, event)
                         // Acknowledge after successful broadcast
                         consumerCommands.xack(streamKey, consumerGroup, msg.id)
                     } catch (_: Throwable) {
@@ -313,26 +317,6 @@ class RedisService(redisUrl: String) {
             } catch (e: Throwable) {
                 // any other failure → avoid tight loop
                 delay(1_000)
-            }
-        }
-    }
-
-    /**
-    * Broadcasts live events to all WebSocket sessions in a room.
-    */
-    private suspend fun broadcastToRoom(roomId: String, event: LiveEvent) {
-        val safe = event.withDefaults()
-        val json = LiveEventJson.encodeToString(PolymorphicSerializer(LiveEvent::class), safe)
-
-        val sessions = SessionManager.getRoomSessions(roomId)
-        println("broadcastToRoom: roomId=$roomId sessions=${sessions.size} event=${event::class.simpleName} json=${json.take(400)}")
-
-        sessions.forEach { session ->
-            try {
-                session.send(Frame.Text(json))
-            } catch (e: Throwable) {
-                println(("broadcastToRoom: failed to send to session for room=$roomId: ${e.message}, $e"))
-                SessionManager.removeSession(session)
             }
         }
     }
