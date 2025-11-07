@@ -17,9 +17,9 @@ class DistributedSessionManager(
     }
 
     /**
-    * Adds a session to distributed registry
-    * Stores: user→session mapping, room→users mapping, session details
-    */
+     * Adds a session to distributed registry
+     * Stores: user→session mapping, room→users mapping, session details
+     */
     suspend fun addSession(roomId: String, userId: String, username: String) {
         val sessionKey = "session:$userId:$roomId"
         val sessionData = mapOf(
@@ -30,73 +30,73 @@ class DistributedSessionManager(
             "connectedAt" to System.currentTimeMillis().toString()
         )
 
-        // Store session data
-        redisService.producerCommands.hset(sessionKey, sessionData)
-        redisService.producerCommands.expire(sessionKey, SESSION_TTL)
+        // Store session data (hash) and set TTL
+        redisService.hsetAll(sessionKey, sessionData)
+        redisService.expire(sessionKey, SESSION_TTL.seconds)
 
-        // Add user to room set
-        redisService.producerCommands.sadd("room:$roomId:users", userId)
-        redisService.producerCommands.expire("room:$roomId:users", ROOM_TTL)
+        // Add user to room set and set room TTL
+        redisService.sadd("room:$roomId:users", userId)
+        redisService.expire("room:$roomId:users", ROOM_TTL.seconds)
 
         // Track instance→user mapping for cleanup
-        redisService.producerCommands.sadd("instance:$instanceId:users", "$userId:$roomId")
+        redisService.sadd("instance:$instanceId:users", "$userId:$roomId")
     }
 
     /**
-    * Removes session from distributed registry
-    * Called when WebSocket disconnects
-    */
+     * Removes session from distributed registry
+     * Called when WebSocket disconnects
+     */
     suspend fun removeSession(userId: String, roomId: String) {
         val sessionKey = "session:$userId:$roomId"
 
         // Remove user from room
-        redisService.producerCommands.srem("room:$roomId:users", userId)
+        redisService.srem("room:$roomId:users", userId)
 
         // Remove session data
-        redisService.producerCommands.del(sessionKey)
+        redisService.del(sessionKey)
 
         // Remove from instance tracking
-        redisService.producerCommands.srem("instance:$instanceId:users", "$userId:$roomId")
+        redisService.srem("instance:$instanceId:users", "$userId:$roomId")
 
         // If room is empty, clean up room data
-        val roomUsers = redisService.producerCommands.smembers("room:$roomId:users")
+        val roomUsers = redisService.getRoomUsers(roomId)
         if (roomUsers.isEmpty()) {
-            redisService.producerCommands.del("room:$roomId:users")
+            redisService.del("room:$roomId:users")
         }
     }
 
     /**
-    * Gets all users in a room across all instances
-    */
+     * Gets all users in a room across all instances
+     */
     suspend fun getRoomUsers(roomId: String): Set<String> {
-        return redisService.producerCommands.smembers("room:$roomId:users") ?: emptySet()
+        return redisService.getRoomUsers(roomId)
     }
 
     /**
-    * Gets session info for a specific user
-    */
+     * Gets session info for a specific user
+     */
     suspend fun getSessionInfo(userId: String, roomId: String): Map<String, String>? {
         val sessionKey = "session:$userId:$roomId"
-        return redisService.producerCommands.hgetall(sessionKey)
+        return redisService.hgetall(sessionKey)
     }
 
     /**
-    * Checks if a user is in a room (any instance)
-    */
+     * Checks if a user is in a room (any instance)
+     */
     suspend fun isUserInRoom(userId: String, roomId: String): Boolean {
-        return redisService.producerCommands.sismember("room:$roomId:users", userId)
+        return redisService.isUserInRoom(roomId, userId)
     }
 
     /**
-    * Gets all sessions for this instance (for cleanup)
-    */
+     * Gets all sessions for this instance (for cleanup)
+     */
     private suspend fun getInstanceSessions(): Set<String> {
-        return redisService.producerCommands.smembers("instance:$instanceId:users") ?: emptySet()
+        return redisService.smembers("instance:$instanceId:users")
     }
 
     /**
-    * Clean up dead sessions (called on instance startup)
-    */
+     * Clean up dead sessions (called on instance startup)
+     */
     suspend fun cleanupInstanceSessions() {
         val instanceSessions = getInstanceSessions()
         instanceSessions.forEach { session ->

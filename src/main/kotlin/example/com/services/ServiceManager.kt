@@ -1,4 +1,4 @@
-package example.com
+package example.com.services
 
 import example.com.schemas.NotificationSchema
 import example.com.schemas.UserSchema
@@ -15,7 +15,7 @@ import java.util.UUID
 
 /**
  * Centralized service container that manages all distributed services and their lifecycle.
- * Provides dependency injection and coordinated startup/shutdown.
+ * Start Pub/Sub listeners alongside Stream processors.
  */
 class ServiceManager(
     private val redisService: RedisService,
@@ -34,28 +34,47 @@ class ServiceManager(
     val crossInstanceBroadcaster = CrossInstanceBroadcaster(redisService, instanceId)
     val notificationWorker = NotificationWorker(redisService, notificationSchema, userSchema)
 
+    // Specialized stream workers for durable processing
+    val moderationWorker = ModerationWorker(redisService)
+    val analyticsWorker = AnalyticsWorker(redisService)
+
     // Background jobs
     private var redisConsumerJob: Job? = null
     private var notificationWorkerJob: Job? = null
     private var sessionCleanupJob: Job? = null
     private var crossInstanceListenerJob: Job? = null
 
+    // Stream processor jobs for durable workflows
+    private var moderationWorkerJob: Job? = null
+    private var analyticsWorkerJob: Job? = null
+
     /**
     * Starts all background workers and services
+    * Start Pub/Sub listeners and specialized Stream workers
     */
     fun startAllServices() {
-        println("🚀 Starting all background services for instance $instanceId...")
-
-        // Start Redis event consumer
-        redisConsumerJob = launch {
-            println("🚀 Starting Redis consumeEvents worker...")
-            redisService.consumeEvents("live-group", crossInstanceBroadcaster)
+        // CHANGE: Start Pub/Sub listener for real-time cross-instance events
+        crossInstanceListenerJob = launch {
+            println("🚀 Starting cross-instance Pub/Sub listener...")
+            crossInstanceBroadcaster.startCrossInstanceListener()
         }
 
-        // Start notification worker
+        // Start notification worker (uses Streams for durable social events)
         notificationWorkerJob = launch {
-            println("🚀 Starting NotificationWorker...")
+            println("🚀 Starting NotificationWorker (Streams for social events)...")
             notificationWorker.run()
+        }
+
+        // NEW: Start moderation stream processor
+        moderationWorkerJob = launch {
+            println("🚀 Starting example.com.services.ModerationWorker (Streams for chat moderation)...")
+            moderationWorker.processModerationStream()
+        }
+
+        // NEW: Start analytics stream processor
+        analyticsWorkerJob = launch {
+            println("🚀 Starting AnalyticsWorker (Streams for engagement analytics)...")
+//            analyticsWorker.processAnalyticsStream()
         }
 
         // Start distributed session cleanup
@@ -65,14 +84,9 @@ class ServiceManager(
             println("✅ Distributed session cleanup completed")
         }
 
-        // Start cross-instance message listener
-        crossInstanceListenerJob = launch {
-            println("🚀 Starting cross-instance broadcaster...")
-            crossInstanceBroadcaster.startCrossInstanceListener()
-            println("✅ Cross-instance broadcaster started")
-        }
-
         println("✅ All background services started successfully for instance $instanceId")
+        println("   - Pub/Sub: Real-time cross-instance events")
+        println("   - Streams: Moderation, Analytics, Billing, Social events")
     }
 
     /**
@@ -103,13 +117,15 @@ class ServiceManager(
         return mapOf(
             "redis_connected" to isRedisConnected(),
             "cross_instance_running" to crossInstanceBroadcaster.isRunning(),
-            "distributed_sessions_healthy" to true // Add actual health checks as needed
+            "moderation_worker_healthy" to moderationWorker.isHealthy(),
+//            "analytics_worker_healthy" to analyticsWorker.isHealthy(),
+            "distributed_sessions_healthy" to true
         )
     }
 
     private suspend fun isRedisConnected(): Boolean {
         return try {
-            redisService.producerCommands.ping() == "PONG"
+            redisService.ping()
         } catch (e: Exception) {
             false
         }

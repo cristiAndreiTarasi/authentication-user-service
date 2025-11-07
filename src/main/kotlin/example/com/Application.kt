@@ -15,6 +15,7 @@ import example.com.schemas.StreamSchema
 import example.com.schemas.TagSchema
 import example.com.schemas.TokenSchema
 import example.com.schemas.UserSchema
+import example.com.services.ServiceManager
 import example.com.services.gridfs.GridFSService
 import example.com.services.hashing.HashingService
 import example.com.services.redis.RedisService
@@ -24,7 +25,6 @@ import example.com.services.token.TokenService
 import example.com.services.ws_session.CrossInstanceBroadcaster
 import example.com.services.ws_session.DistributedPermissionManager
 import example.com.services.ws_session.DistributedSessionManager
-import example.com.services.ws_session.PermissionManager
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.application.Application
 import io.ktor.server.application.ApplicationStopping
@@ -32,9 +32,8 @@ import io.ktor.server.application.call
 import io.ktor.server.netty.EngineMain
 import io.ktor.server.response.respond
 import io.ktor.server.routing.get
+import io.ktor.server.routing.route
 import io.ktor.server.routing.routing
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch
 import org.litote.kmongo.KMongo
 import java.time.Duration
 import java.util.UUID
@@ -145,25 +144,28 @@ fun Application.module() {
 
     // Health check endpoint for monitoring
     routing {
-        get("/health") {
-            val health = serviceManager.healthCheck()
-            if (health.all { it.value }) {
-                call.respond(HttpStatusCode.OK, health)
-            } else {
-                call.respond(HttpStatusCode.ServiceUnavailable, health)
+        route("/health") {
+            get {
+                val health = serviceManager.healthCheck()
+                if (health.all { it.value }) {
+                    call.respond(HttpStatusCode.OK, health)
+                } else {
+                    call.respond(HttpStatusCode.ServiceUnavailable, health)
+                }
             }
-        }
 
-        get("/health/instance") {
-            call.respond(mapOf("instanceId" to serviceManager.instanceId))
-        }
+            get("/instance") {
+                call.respond(mapOf("instanceId" to serviceManager.instanceId))
+            }
 
-        get("/health/redis") {
-            val redisInfo = mapOf(
-                "connected" to (redisService.producerCommands.ping() == "PONG"),
-                "instanceId" to serviceManager.instanceId
-            )
-            call.respond(redisInfo)
+            get("/redis") {
+                val isConnected = redisService.ping()
+                val redisInfo = mapOf(
+                    "connected" to isConnected,
+                    "instanceId" to serviceManager.instanceId
+                )
+                call.respond(redisInfo)
+            }
         }
     }
 

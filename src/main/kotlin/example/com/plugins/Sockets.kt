@@ -6,7 +6,7 @@ import example.com.ModerationReason
 import example.com.ModerationSeverity
 import example.com.NotificationEventJson
 import example.com.ProfileUpdateType
-import example.com.ServiceManager
+import example.com.services.ServiceManager
 import example.com.routes.dtos.LiveEvent
 import example.com.routes.dtos.NotificationEvent
 import example.com.routes.dtos.withDefaults
@@ -15,17 +15,11 @@ import example.com.schemas.UserSchema
 import example.com.services.notifications.NotificationSessionRegistry
 import example.com.services.redis.RedisService
 import example.com.services.token.TokenService
-import example.com.services.ws_session.CrossInstanceBroadcaster
-import example.com.services.ws_session.DistributedPermissionManager
-import example.com.services.ws_session.DistributedSessionManager
-import example.com.services.ws_session.PermissionManager
 import example.com.services.ws_session.SessionManager
 import example.com.services.ws_session.WebSocketAuthHelper
 import io.ktor.server.application.Application
 import io.ktor.server.application.install
 import io.ktor.server.auth.authenticate
-import io.ktor.server.auth.jwt.JWTPrincipal
-import io.ktor.server.auth.principal
 import io.ktor.server.routing.route
 import io.ktor.server.routing.routing
 import io.ktor.server.websocket.WebSockets
@@ -37,14 +31,9 @@ import io.ktor.websocket.Frame
 import io.ktor.websocket.WebSocketSession
 import io.ktor.websocket.close
 import io.ktor.websocket.readText
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch
 import kotlinx.serialization.PolymorphicSerializer
-import kotlinx.serialization.encodeToString
 import java.time.Duration
-import java.util.UUID
 
 /**
  * Configures WebSocket endpoints for live streaming rooms and notifications with distributed session management.
@@ -188,6 +177,24 @@ fun Application.configureSockets(
     suspend fun sendStreamEndedEvent(roomId: String) {
         val event = LiveEvent.StreamEndedEvent(roomId = roomId)
         crossInstanceBroadcaster.broadcastToRoom(roomId, event)
+
+        val localSessions = SessionManager.getRoomSessions(roomId).toList()
+        if (localSessions.isNotEmpty()) {
+            localSessions.forEach { session ->
+                try {
+                    val closeReason = CloseReason(CloseReason.Codes.GOING_AWAY, "Stream ended by publisher")
+                    session.close(closeReason)
+                } catch (e: Exception) {
+                    println("DEBUG: Error closing session: ${e.message}")
+                } finally {
+                    val sessionUserId = SessionManager.getUserId(session)
+                    SessionManager.removeSession(session)
+                    if (sessionUserId != null) {
+                        distributedSessionManager.removeSession(sessionUserId, roomId)
+                    }
+                }
+            }
+        }
     }
 
     /**
@@ -212,53 +219,10 @@ fun Application.configureSockets(
     }
 
     /**
-    * Broadcasts stream owner information to all clients in a room.
-    * Used when stream owner changes or on room initialization.
-    */
-    suspend fun broadcastStreamOwnerInfo(roomId: String) {
-        val ownerId = distributedPermissionManager.getStreamOwner(roomId) ?: return
-
-        // Get owner info from distributed permission manager or database
-        val ownerInfo = distributedPermissionManager.getStreamOwnerInfo(roomId)
-        val ownerUsername = ownerInfo?.get("username")
-        val ownerAvatar = ownerInfo?.get("avatarUrl")?.takeIf { it.isNotBlank() }
-
-        val finalUsername = ownerUsername ?: "Streamer"
-
-        if (ownerUsername != null) {
-            val event = LiveEvent.PublisherInfoEvent(
-                roomId = roomId,
-                userId = ownerId,
-                username = finalUsername,
-                avatarUrl = ownerAvatar
-            )
-
-            // Use cross-instance broadcaster instead of local sessions only
-            crossInstanceBroadcaster.broadcastToRoom(roomId, event)
-        }
-    }
-
-    /**
-    * Sends a system message to all clients in a room.
-    */
-    suspend fun sendSystemMessage(
-        roomId: String,
-        text: String,
-        redisManager: RedisService
-    ) {
-        val event = LiveEvent.SystemMessage(
-            roomId = roomId,
-            text = text,
-            timestamp = System.currentTimeMillis()
-        )
-        crossInstanceBroadcaster.broadcastToRoom(roomId, event)
-    }
-
-    /**
     * Main handler for live room events. Processes different types of events
-    * and applies appropriate business logic and permissions.
+    * with clear separation between real-time (Pub/Sub) and durable (Streams) processing.
     *
-    * Events flow: Client → WebSocket → handleLiveRoomEvent → Redis Stream → All Clients
+    * Updated to use Pub/Sub for real-time delivery and Streams for durable workflows
     */
     suspend fun handleLiveRoomEvent(
         event: LiveEvent,
@@ -272,68 +236,9 @@ fun Application.configureSockets(
         }
 
         when (event) {
-            is LiveEvent.ChatMessage, is LiveEvent.SystemMessage -> {
-                redisManager.addToHistory(roomId, event)
-
-                when (event) {
-                    is LiveEvent.ChatMessage -> {
-                        if (event.initiatorId == "system" || !distributedPermissionManager.isMuted(roomId, userId)) {
-                            crossInstanceBroadcaster.broadcastToRoom(roomId, event)
-                        }
-                    }
-                    else -> {
-                        crossInstanceBroadcaster.broadcastToRoom(roomId, event)
-                    }
-                }
-            }
-
-            is LiveEvent.KickUser -> {
-                if (distributedPermissionManager.isStreamOwner(roomId, userId) ||
-                    distributedPermissionManager.isModerator(roomId, userId)) {
-
-                    kickUser(roomId, event.targetUserId)
-                    crossInstanceBroadcaster.broadcastToRoom(roomId, event)
-                }
-            }
-
-            is LiveEvent.MuteUser -> {
-                // Allow both stream owner AND moderators to mute users
-                if (distributedPermissionManager.isStreamOwner(roomId, userId) ||
-                    distributedPermissionManager.isModerator(roomId, userId)) {
-
-                    distributedPermissionManager.muteUser(roomId, event.targetUserId)
-                    crossInstanceBroadcaster.broadcastToRoom(roomId, event)
-                }
-            }
-
-            is LiveEvent.UnmuteUser -> {
-                // Allow both stream owner AND moderators to unmute users
-                if (distributedPermissionManager.isStreamOwner(roomId, userId) ||
-                    distributedPermissionManager.isModerator(roomId, userId)) {
-
-                    distributedPermissionManager.unmuteUser(roomId, event.targetUserId)
-                    crossInstanceBroadcaster.broadcastToRoom(roomId, event)
-                }
-            }
-
-            is LiveEvent.GrantModerator -> {
-                // Only stream owners can manage moderators
-                if (distributedPermissionManager.isStreamOwner(roomId, userId)) {
-                    distributedPermissionManager.grantModerator(roomId, event.targetUserId)
-                    crossInstanceBroadcaster.broadcastToRoom(roomId, event)
-                }
-            }
-
-            is LiveEvent.RevokeModerator -> {
-                // Only stream owners can manage moderators
-                if (distributedPermissionManager.isStreamOwner(roomId, userId)) {
-                    distributedPermissionManager.revokeModerator(roomId, event.targetUserId)
-                    crossInstanceBroadcaster.broadcastToRoom(roomId, event)
-                }
-            }
-
+            // REAL-TIME EVENTS (Pub/Sub only)
             is LiveEvent.Like -> {
-                // Increment room and user like counters
+                // Real-time: Increment counters and broadcast instantly
                 redisManager.incrementCounter("room:$roomId:likes", event.count.toLong())
                 val userTotal = redisManager.incrementUserLikeCount(roomId, userId, event.count.toLong())
 
@@ -347,81 +252,160 @@ fun Application.configureSockets(
                         else -> "$username has sent $userTotal likes!"
                     }
 
-                    sendSystemMessage(roomId, message, redisManager)
+                    val systemEvent = LiveEvent.SystemMessage(
+                        roomId = roomId,
+                        text = message,
+                        timestamp = System.currentTimeMillis()
+                    )
+                    // Real-time: Use Pub/Sub for system messages
+                    crossInstanceBroadcaster.broadcastToRoom(roomId, systemEvent)
                 }
 
+                // Real-time: Broadcast like event via Pub/Sub
                 crossInstanceBroadcaster.broadcastToRoom(roomId, event)
-            }
 
-            is LiveEvent.Gift -> {
-                // Track gift counts by gift type
-                redisManager.incrementCounter("room:$roomId:gifts:${event.giftId}", event.quantity.toLong())
-                redisManager.addToStream(event)
+                // Durable: Only persist significant like activity for analytics
+                if (event.count > 10 || userTotal % 100 == 0L) {
+                    redisManager.addToAnalyticsStream(event)
+                }
             }
 
             is LiveEvent.JoinRoom -> {
-                // First user to join becomes stream owner
-                if (!distributedPermissionManager.hasStreamOwner(roomId)) {
-                    val user = userSchema.findById(userId.toInt())
-                    distributedPermissionManager.setStreamOwner(
-                        roomId,
-                        userId,
-                        user?.username ?: "Streamer",
-                        user?.imageUrl
-                    )
-
-                    broadcastStreamOwnerInfo(roomId)
-                }
-
                 val systemMessage = LiveEvent.SystemMessage(
                     roomId = roomId,
-                    text = "${event.username} joined the stream"
+                    text = "${event.username} joined the stream",
+                    timestamp = System.currentTimeMillis()
                 )
 
-                crossInstanceBroadcaster.broadcastToRoom(roomId, systemMessage)
+                // Real-time: Broadcast both join event and system message
                 crossInstanceBroadcaster.broadcastToRoom(roomId, event)
+                crossInstanceBroadcaster.broadcastToRoom(roomId, systemMessage)
+
+                // Update computed stats
                 updateStreamStats(roomId, redisManager)
             }
 
             is LiveEvent.LeaveRoom -> {
-                // Update stats when user leaves
-                val sessionInfo = distributedSessionManager.getSessionInfo(userId, roomId)
-                val username = sessionInfo?.get("username") ?: "User"
-
                 val systemMessage = LiveEvent.SystemMessage(
                     roomId = roomId,
-                    text = "$username left the stream"
+                    text = "${event.username} left the stream",
+                    timestamp = System.currentTimeMillis()
                 )
 
-                // Add to stream and update stats
-                // crossInstanceBroadcaster.broadcastToRoom(roomId, systemMessage)
+                // Real-time: Broadcast both leave event and system message
+                crossInstanceBroadcaster.broadcastToRoom(roomId, event)
+                crossInstanceBroadcaster.broadcastToRoom(roomId, systemMessage)
+
+                // Update computed stats
                 updateStreamStats(roomId, redisManager)
             }
 
-            is LiveEvent.StreamStats -> {
-                // System-generated event, no action needed
+            // HYBRID EVENTS (Real-time + Durable)
+            is LiveEvent.ChatMessage -> {
+                // Durable: Persist for moderation and analytics BEFORE real-time delivery
+                redisManager.addToModerationStream(event)
+                redisManager.addToAnalyticsStream(event)
+
+                // Real-time: Deliver via Pub/Sub if not muted
+                if (!distributedPermissionManager.isMuted(roomId, userId)) {
+                    crossInstanceBroadcaster.broadcastToRoom(roomId, event)
+                }
+
+                // Limited retention: Add to room history for replay
+                redisManager.addToHistory(roomId, event)
             }
 
-            is LiveEvent.PublisherInfoEvent -> {
-                // Handle if needed, or leave empty
+            is LiveEvent.Gift -> {
+                // Real-time: Instant celebration via Pub/Sub
+                crossInstanceBroadcaster.broadcastToRoom(roomId, event)
+
+                // Durable: Critical for billing and revenue tracking
+                redisManager.addToBillingStream(event)
+                redisManager.addToAnalyticsStream(event)
+
+                // Track gift counts
+                redisManager.incrementCounter("room:$roomId:gifts:${event.giftId}", event.quantity.toLong())
             }
 
-            is LiveEvent.StreamEndedEvent -> {
-                // Handle if needed
+            // MODERATION EVENTS (Real-time + Durable Audit)
+            is LiveEvent.KickUser -> {
+                if (distributedPermissionManager.isStreamOwner(roomId, userId) ||
+                    distributedPermissionManager.isModerator(roomId, userId)) {
+
+                    kickUser(roomId, event.targetUserId)
+                    // Real-time: Broadcast action via Pub/Sub
+                    crossInstanceBroadcaster.broadcastToRoom(roomId, event)
+                    // Durable: Audit log for moderation actions
+                    redisManager.addToModerationStream(event)
+                }
             }
 
+            is LiveEvent.MuteUser -> {
+                if (distributedPermissionManager.isStreamOwner(roomId, userId) ||
+                    distributedPermissionManager.isModerator(roomId, userId)) {
+
+                    distributedPermissionManager.muteUser(roomId, event.targetUserId)
+                    // Real-time: Broadcast action
+                    crossInstanceBroadcaster.broadcastToRoom(roomId, event)
+                    // Durable: Audit log
+                    redisManager.addToModerationStream(event)
+                }
+            }
+
+            is LiveEvent.UnmuteUser -> {
+                if (distributedPermissionManager.isStreamOwner(roomId, userId) ||
+                    distributedPermissionManager.isModerator(roomId, userId)) {
+
+                    distributedPermissionManager.unmuteUser(roomId, event.targetUserId)
+                    crossInstanceBroadcaster.broadcastToRoom(roomId, event)
+                    redisManager.addToModerationStream(event)
+                }
+            }
+
+            is LiveEvent.GrantModerator -> {
+                if (distributedPermissionManager.isStreamOwner(roomId, userId)) {
+                    distributedPermissionManager.grantModerator(roomId, event.targetUserId)
+                    crossInstanceBroadcaster.broadcastToRoom(roomId, event)
+                    redisManager.addToModerationStream(event)
+                }
+            }
+
+            is LiveEvent.RevokeModerator -> {
+                if (distributedPermissionManager.isStreamOwner(roomId, userId)) {
+                    distributedPermissionManager.revokeModerator(roomId, event.targetUserId)
+                    crossInstanceBroadcaster.broadcastToRoom(roomId, event)
+                    redisManager.addToModerationStream(event)
+                }
+            }
+
+            // SYSTEM EVENTS (Mostly Real-time)
+            is LiveEvent.SystemMessage -> {
+                // Real-time: Broadcast via Pub/Sub
+                crossInstanceBroadcaster.broadcastToRoom(roomId, event)
+                // Durable: Only persist important system messages
+                if (event.text.contains("violation", ignoreCase = true) ||
+                    event.text.contains("terminated", ignoreCase = true)) {
+                    redisManager.addToModerationStream(event)
+                }
+            }
+
+            // COMPUTED STATE (Real-time only)
+            is LiveEvent.StreamStats, is LiveEvent.PublisherInfoEvent -> {
+                // Real-time: Computed state - no persistence needed
+                crossInstanceBroadcaster.broadcastToRoom(roomId, event)
+            }
+
+            // MODERATION WARNINGS (Real-time + Durable)
             is LiveEvent.ModerationWarningEvent -> {
-                // Broadcast moderation warnings with user-specific messages
+                // Real-time: Customized delivery to each user
                 val streamOwnerId = distributedPermissionManager.getStreamOwner(roomId)
-
-                // Get all local sessions and send customized messages
                 val sessions = SessionManager.getRoomSessions(roomId)
+
                 sessions.forEach { session ->
                     try {
                         val sessionUserId = SessionManager.getUserId(session)
                         val isStreamer = sessionUserId == streamOwnerId
 
-                        // Customize message based on user role and severity
                         val reason = try {
                             ModerationReason.valueOf(event.reason.uppercase())
                         } catch (e: Exception) { ModerationReason.OTHER }
@@ -429,7 +413,6 @@ fun Application.configureSockets(
                             ModerationSeverity.valueOf(event.severity.uppercase())
                         } catch (e: Exception) { ModerationSeverity.WARNING }
 
-                        // Different messages for streamer vs viewers
                         val finalMessage = if (isStreamer) {
                             ModerationMessages.getStreamerWarningMessage(severity, reason)
                         } else {
@@ -444,13 +427,14 @@ fun Application.configureSockets(
                     }
                 }
 
-                // Also broadcast the original event to all instances
-                crossInstanceBroadcaster.broadcastToRoom(roomId, event)
+                // Durable: Persist moderation warnings
+                redisManager.addToModerationStream(event)
             }
 
             is LiveEvent.StreamTerminatedEvent -> {
-                // Broadcast to all sessions in the room (both publisher and consumers)
+                // Real-time: Broadcast to all sessions
                 crossInstanceBroadcaster.broadcastToRoom(roomId, event)
+
                 val streamOwnerId = distributedPermissionManager.getStreamOwner(roomId)
 
                 // Close all local sessions with customized messages
@@ -494,10 +478,13 @@ fun Application.configureSockets(
 
                 distributedPermissionManager.removeRoom(roomId)
                 redisManager.deleteCounters(roomId)
+
+                // Durable: Persist stream termination
+                redisManager.addToModerationStream(event)
             }
 
             is LiveEvent.ModerationClearEvent -> {
-                // Broadcast clear event to all sessions in the room
+                // Real-time: Broadcast clear event
                 crossInstanceBroadcaster.broadcastToRoom(roomId, event)
 
                 // Also send immediate clear to all connected sessions
@@ -510,6 +497,27 @@ fun Application.configureSockets(
                         // ignore send failure
                     }
                 }
+
+                // Durable: Persist moderation clear action
+                redisManager.addToModerationStream(event)
+            }
+
+            is LiveEvent.StreamEndedEvent -> {
+                // Find and close the user's WebSocket session
+                SessionManager.getSession(roomId, userId)?.let { session ->
+                    try {
+                        val closeReason = CloseReason(CloseReason.Codes.GOING_AWAY, "Stream ended")
+                        session.close(closeReason)
+                    } catch (e: Exception) {
+                        println("DEBUG: Error closing session on StreamEndedEvent: ${e.message}")
+                    } finally {
+                        SessionManager.removeSession(session)
+                        distributedSessionManager.removeSession(userId, roomId)
+                    }
+                }
+
+                // Also update stats to reflect the user leaving
+                updateStreamStats(roomId, redisManager)
             }
         }
     }
@@ -623,8 +631,7 @@ fun Application.configureSockets(
                             when (frame) {
                                 is Frame.Text -> {
                                     // Use LiveEventJson for decoding
-                                    val event =
-                                        LiveEventJson.decodeFromString<LiveEvent>(frame.readText())
+                                    val event = LiveEventJson.decodeFromString<LiveEvent>(frame.readText())
                                     handleLiveRoomEvent(event, userId, roomId, redisService)
                                 }
 
@@ -643,7 +650,8 @@ fun Application.configureSockets(
                             username = username,
                             timestamp = System.currentTimeMillis()
                         )
-                        crossInstanceBroadcaster.broadcastToRoom(roomId, leaveEvent)
+
+                        handleLiveRoomEvent(leaveEvent, userId, roomId, redisService)
 
                         // Check if stream owner is leaving
                         if (distributedPermissionManager.isStreamOwner(roomId, userId)) {
@@ -655,15 +663,24 @@ fun Application.configureSockets(
                             // Close all local sessions
                             SessionManager.getRoomSessions(roomId).forEach { session ->
                                 try {
-                                    session.close(CloseReason(CloseReason.Codes.GOING_AWAY, "Stream ended"))
+                                    val sessionUserId = SessionManager.getUserId(session)
+
+                                    if (sessionUserId != userId) {
+                                        val closeReason = CloseReason(CloseReason.Codes.GOING_AWAY, "Stream ended")
+                                        session.close(closeReason)
+                                    }
                                 } catch (e: Exception) {
                                     // ignore
+                                } finally {
+                                    val sessionUserId = SessionManager.getUserId(session)
+                                    SessionManager.removeSession(session)
+                                    if (sessionUserId != null) {
+                                        distributedSessionManager.removeSession(sessionUserId, roomId)
+                                    }
                                 }
-                                SessionManager.removeSession(session)
-                                distributedSessionManager.removeSession(SessionManager.getUserId(session) ?: "", roomId)
                             }
 
-                            // CHANGED: Use distributed permission manager for cleanup
+                            // Use distributed permission manager for cleanup
                             distributedPermissionManager.removeRoom(roomId)
                             redisService.deleteCounters(roomId)
                         } else {

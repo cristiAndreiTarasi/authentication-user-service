@@ -107,7 +107,7 @@ fun Route.moderationRoutes(
                     timestamp = nowMs
                 )
 
-                redisManager.addToStream(warningEvent)
+                redisManager.addToModerationStream(warningEvent)
 
                 // Immediate low-latency per-session dispatch using same timestamp
                 val sessions = SessionManager.getRoomSessions(roomId).toList()
@@ -165,7 +165,7 @@ fun Route.moderationRoutes(
                 val roomId = resolveRoomIdParam(rawParam)
                 val clearEvent = LiveEvent.ModerationClearEvent(roomId = roomId)
 
-                redisManager.addToStream(clearEvent)
+                redisManager.addToModerationStream(clearEvent)
 
                 call.respond(HttpStatusCode.OK, ModerationActionResponse(
                     success = true,
@@ -202,7 +202,7 @@ fun Route.moderationRoutes(
                     message = message
                 )
 
-                redisManager.addToStream(terminationEvent)
+                redisManager.addToModerationStream(terminationEvent)
 
                 // Update DB: mark terminated. If caller passed numeric id use it, otherwise look up stream by streamKey
                 val numeric = rawParam.toIntOrNull()

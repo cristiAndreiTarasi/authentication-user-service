@@ -9,20 +9,30 @@ import example.com.services.notifications.NotificationSessionRegistry
 import example.com.services.redis.RedisService
 import io.ktor.websocket.Frame
 import io.lettuce.core.Consumer
+import io.lettuce.core.RedisFuture
 import io.lettuce.core.StreamMessage
 import io.lettuce.core.XReadArgs
+import io.lettuce.core.pubsub.RedisPubSubListener
 import io.lettuce.core.pubsub.StatefulRedisPubSubConnection
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable.isActive
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.serialization.PolymorphicSerializer
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
+import kotlin.coroutines.resume
+import kotlin.coroutines.resumeWithException
+import kotlin.coroutines.suspendCoroutine
 
 @Serializable
 data class CrossInstanceMessage(
@@ -43,102 +53,163 @@ class CrossInstanceBroadcaster(
     private val instanceId: String
 ) {
     private val json = Json { ignoreUnknownKeys = true }
-    private val CROSS_INSTANCE_STREAM = "cross_instance_stream"
-    private val CONSUMER_GROUP = "cross_instance_group"
 
-    private val scope = CoroutineScope(SupervisorJob())
-    private var listenerJob: Job? = null
+    // Using Pub/Sub channels instead of Streams for real-time events
+    private val ROOM_EVENTS_PREFIX = "room_events:"
+    private val USER_NOTIFICATIONS_CHANNEL = "user_notifications"
+
+    // Keep Stream for cross-instance control messages (rare, need persistence)
+    private val CROSS_INSTANCE_CONTROL_STREAM = "cross_instance_control"
+
+    // Scope used for listener & background tasks
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private var pubSubListenerJob: Job? = null
+    private var controlStreamJob: Job? = null
     private var isRunning: Boolean = false
 
-    /**
-    * Starts listening for cross-instance messages
-    * Call this once per instance during startup
-    */
-    suspend fun startCrossInstanceListener() { // Remove unused parameter
-        // Create consumer group if it doesn't exist
-        try {
-            redisService.createConsumerGroupIfNotExists(CROSS_INSTANCE_STREAM, CONSUMER_GROUP)
-        } catch (e: Exception) {
-            println("DEBUG: Consumer group already exists or error: ${e.message}")
-        }
+    // Tunables for broadcasting
+    private val BROADCAST_CONCURRENCY = 100
 
-        // Start consuming from the stream
-        listenerJob = scope.launch {
-            isRunning = true
-            consumeCrossInstanceMessages()
-        }
-
-        println("DEBUG: Cross-instance broadcaster (Streams) started for instance $instanceId")
-    }
+    // Create dedicated Pub/Sub connections
+    private val pubSubConnection: StatefulRedisPubSubConnection<String, String> =
+        redisService.redisClient.connectPubSub()
 
     /**
-     * Separate consumption loop for better organization
+     * Small helper to await Lettuce RedisFuture in this class
      */
-    private suspend fun consumeCrossInstanceMessages() {
-        while (isActive) {
-            try {
-                val messages: List<StreamMessage<String, String>> =
-                    redisService.consumerCommands.xreadgroup(
-                        Consumer.from(CONSUMER_GROUP, instanceId),
-                        XReadArgs.Builder.block(5000).count(100),
-                        XReadArgs.StreamOffset.from(CROSS_INSTANCE_STREAM, ">")
-                    )
-
-                if (messages.isEmpty()) {
-                    delay(100)
-                    continue
-                }
-
-                for (msg in messages) {
+    private suspend fun <T> awaitFuture(future: RedisFuture<T>): T =
+        suspendCoroutine { cont ->
+            when {
+                future.isDone -> {
                     try {
-                        val messageType = msg.body["type"]
-                        val payload = msg.body["payload"]
-                        val senderInstance = msg.body["senderInstance"]
-                        val roomId = msg.body["roomId"]
-
-                        // Ignore our own messages
-                        if (senderInstance == instanceId) {
-                            redisService.consumerCommands.xack(CROSS_INSTANCE_STREAM, CONSUMER_GROUP, msg.id)
-                            continue
-                        }
-
-                        when (messageType) {
-                            "live_event" -> {
-                                if (payload != null && roomId != null) {
-                                    handleCrossInstanceLiveEvent(roomId, payload)
-                                }
-                            }
-                            // Remove notification_event handling since we're using Pub/Sub for it
-                        }
-
-                        // Acknowledge message after successful processing
-                        redisService.consumerCommands.xack(CROSS_INSTANCE_STREAM, CONSUMER_GROUP, msg.id)
-
+                        cont.resume(future.get())
                     } catch (e: Exception) {
-                        println("DEBUG: Error processing cross-instance message: ${e.message}")
-                        // Don't ack on error - let it be retried
+                        cont.resumeWithException(e)
                     }
                 }
-            } catch (e: Exception) {
-                println("DEBUG: Error in cross-instance listener: ${e.message}")
-                delay(1000)
+                future.isCancelled -> cont.resumeWithException(java.util.concurrent.CancellationException("RedisFuture cancelled"))
+                else -> {
+                    future.handle { res, err ->
+                        if (err != null) cont.resumeWithException(err) else cont.resume(res)
+                    }
+                }
             }
         }
 
-        isRunning = false
+    /**
+     * CHANGE: Starts Pub/Sub listener for real-time cross-instance events
+     * Replaces the Streams-based listener for better real-time performance
+     */
+    suspend fun startCrossInstanceListener() {
+        // Start Pub/Sub listener for real-time events
+        pubSubListenerJob = scope.launch {
+            isRunning = true
+            startPubSubListener()
+        }
+
+        // Keep Stream listener only for control messages (room cleanup, etc.)
+        controlStreamJob = scope.launch {
+            listenForControlMessages()
+        }
     }
 
     /**
-    * Broadcasts live events to all users in a room across all instances
-    */
+     * Pub/Sub listener for real-time event broadcasting
+     * Uses pattern subscription to listen to all room events
+     */
+    private suspend fun startPubSubListener() {
+        val pubSubAdapter = pubSubConnection.sync()
+
+        try {
+            // Subscribe to pattern for all room events
+            pubSubAdapter.psubscribe("${ROOM_EVENTS_PREFIX}*")
+
+            pubSubConnection.addListener(object : RedisPubSubListener<String, String> {
+                override fun message(channel: String, message: String) {
+                    // Handle direct channel subscriptions
+                    if (channel.startsWith(ROOM_EVENTS_PREFIX)) {
+                        scope.launch {
+                            handleRoomEventMessage(channel, message)
+                        }
+                    }
+                }
+
+                override fun message(pattern: String, channel: String, message: String) {
+                    if (pattern == "${ROOM_EVENTS_PREFIX}*") {
+                        scope.launch {
+                            handleRoomEventMessage(channel, message)
+                        }
+                    }
+                }
+
+                override fun subscribed(channel: String, count: Long) {
+                    println("DEBUG: Subscribed to $channel, total: $count")
+                }
+
+                override fun psubscribed(pattern: String, count: Long) {
+                    println("DEBUG: Pattern subscribed to $pattern, total: $count")
+                }
+
+                override fun unsubscribed(channel: String, count: Long) {
+                    println("DEBUG: Unsubscribed from $channel, total: $count")
+                }
+
+                override fun punsubscribed(pattern: String, count: Long) {
+                    println("DEBUG: Pattern unsubscribed from $pattern, total: $count")
+                }
+            })
+
+            println("DEBUG: Pub/Sub listener started for pattern ${ROOM_EVENTS_PREFIX}*")
+
+            // Keep the listener alive
+            while (isActive) {
+                delay(10000) // Just keep alive
+            }
+        } catch (e: Exception) {
+            println("DEBUG: Pub/Sub listener error: ${e.message}")
+            // Attempt restart after delay
+            delay(5000)
+            if (isActive) {
+                startPubSubListener()
+            }
+        }
+    }
+
+    /**
+     * Handle incoming room events from Pub/Sub
+     */
+    private suspend fun handleRoomEventMessage(channel: String, message: String) {
+        try {
+            val roomId = channel.removePrefix(ROOM_EVENTS_PREFIX)
+            // Parse the cross-instance message
+            val crossMessage = json.decodeFromString<CrossInstanceMessage>(message)
+
+            // Ignore our own messages
+            if (crossMessage.senderInstance == instanceId) {
+                return
+            }
+
+            // Broadcast to local sessions in the room
+            broadcastToLocalRoom(roomId, crossMessage.payload)
+
+        } catch (e: Exception) {
+            println("DEBUG: Error handling room event message: ${e.message}")
+        }
+    }
+
+    /**
+     * Use Pub/Sub for real-time events and Streams for durable events
+     * Real-time events: likes, joins, leaves, chat messages (delivery)
+     * Durable events: chat messages (persistence), gifts, moderation actions
+     */
     suspend fun broadcastToRoom(roomId: String, event: LiveEvent) {
         val safeEvent = event.withDefaults()
         val eventJson = LiveEventJson.encodeToString(PolymorphicSerializer(LiveEvent::class), safeEvent)
 
-        // Broadcast to local users first (for lowest latency)
+        // lways broadcast to local users first (lowest latency)
         broadcastToLocalRoom(roomId, eventJson)
 
-        // 2. Publish to Redis for other instances
+        // Use Pub/Sub for cross-instance real-time delivery
         val crossInstanceMessage = CrossInstanceMessage(
             type = "live_event",
             roomId = roomId,
@@ -148,20 +219,46 @@ class CrossInstanceBroadcaster(
         )
 
         val messageJson = json.encodeToString(CrossInstanceMessage.serializer(), crossInstanceMessage)
-        redisService.producerCommands.xadd(
-            CROSS_INSTANCE_STREAM,
-            mapOf(
-                "type" to "live_event",
-                "roomId" to roomId,
-                "senderInstance" to instanceId,
-                "payload" to messageJson
-            )
-        )
+
+        try {
+            // Use Pub/Sub for real-time events
+            awaitFuture(redisService.producerCommands.publish("${ROOM_EVENTS_PREFIX}$roomId", messageJson))
+        } catch (e: Exception) {
+            println("DEBUG: Failed to publish room event: ${e.message}")
+        }
+
+        // Use Streams ONLY for durable events that need persistence
+        when (event) {
+            is LiveEvent.ChatMessage -> {
+                // Durable: Persist chat messages for moderation and analytics
+                redisService.addToModerationStream(event)
+                redisService.addToAnalyticsStream(event)
+            }
+            is LiveEvent.Gift -> {
+                // Durable: Gift events for billing and analytics
+                redisService.addToBillingStream(event)
+                redisService.addToAnalyticsStream(event)
+            }
+            is LiveEvent.Like -> {
+                // Ephemeral: Likes are real-time only (unless analytics needs them)
+                if (event.count > 10) {
+                    redisService.addToAnalyticsStream(event)
+                }
+            }
+            is LiveEvent.KickUser, is LiveEvent.MuteUser, is LiveEvent.UnmuteUser,
+            is LiveEvent.GrantModerator, is LiveEvent.RevokeModerator -> {
+                // Durable: Moderation actions for audit log
+                redisService.addToModerationStream(event)
+            }
+
+            else -> {}
+            // Ephemeral events (joins, leaves, system messages) don't go to Streams
+        }
     }
 
     /**
-    * Broadcasts notification events to specific users across instances
-    */
+     * Modified to use Pub/Sub for user notifications
+     */
     suspend fun sendToUser(userId: Int, event: NotificationEvent) {
         val safeEvent = event.withDefaults()
         val eventJson = NotificationEventJson.encodeToString(safeEvent)
@@ -170,7 +267,7 @@ class CrossInstanceBroadcaster(
         val localDelivered = NotificationSessionRegistry.sendToUser(userId, eventJson)
 
         if (!localDelivered) {
-            // User not local - publish for other instances
+            // Use Pub/Sub for cross-instance user notifications
             val crossInstanceMessage = CrossInstanceMessage(
                 type = "notification_event",
                 targetUserId = userId.toString(),
@@ -180,48 +277,107 @@ class CrossInstanceBroadcaster(
             )
 
             val messageJson = json.encodeToString(CrossInstanceMessage.serializer(), crossInstanceMessage)
-            redisService.producerCommands.publish("cross_instance:user_message", messageJson)
+            try {
+                // CHANGE: Using Pub/Sub instead of publish command
+                awaitFuture(redisService.producerCommands.publish(USER_NOTIFICATIONS_CHANNEL, messageJson))
+            } catch (e: Exception) {
+                println("DEBUG: Failed to publish user notification: ${e.message}")
+            }
         }
     }
 
     /**
-    * Broadcasts to local users only
-    */
-    private suspend fun broadcastToLocalRoom(roomId: String, eventJson: String) {
-        val sessions = SessionManager.getRoomSessions(roomId)
-        sessions.forEach { session ->
+     * Listen for user notifications via Pub/Sub
+     */
+    private fun listenForUserNotifications() {
+        val pubSubAdapter = pubSubConnection.sync()
+        pubSubAdapter.subscribe(USER_NOTIFICATIONS_CHANNEL)
+    }
+
+    private suspend fun handleUserNotification(message: String) {
+        try {
+            val crossMessage = json.decodeFromString<CrossInstanceMessage>(message)
+
+            // Ignore our own messages
+            if (crossMessage.senderInstance == instanceId) return
+
+            val targetUserId = crossMessage.targetUserId?.toIntOrNull() ?: return
+
+            // Deliver to local session if exists
+            NotificationSessionRegistry.sendToUser(targetUserId, crossMessage.payload)
+        } catch (e: Exception) {
+            println("DEBUG: Error handling user notification: ${e.message}")
+        }
+    }
+
+    /**
+     * Listen for control messages via Streams (rare, need persistence)
+     */
+    private suspend fun listenForControlMessages() {
+        try {
+            redisService.createConsumerGroupIfNotExists(CROSS_INSTANCE_CONTROL_STREAM, "control_group")
+        } catch (e: Exception) {
+            // Group likely exists
+        }
+
+        while (isActive) {
             try {
-                session.send(Frame.Text(eventJson))
+                val messages = awaitFuture(redisService.consumerCommands.xreadgroup(
+                    Consumer.from("control_group", instanceId),
+                    XReadArgs.Builder.block(500).count(10),
+                    XReadArgs.StreamOffset.from(CROSS_INSTANCE_CONTROL_STREAM, ">")
+                ))
+
+                messages?.forEach { msg ->
+                    processControlMessage(msg)
+                }
             } catch (e: Exception) {
-                // Remove dead sessions
-                SessionManager.removeSession(session)
+                delay(1000)
             }
         }
     }
 
-    private suspend fun handleCrossInstanceLiveEvent(roomId: String, payload: String) {
-        try {
-            val crossMessage = json.decodeFromString<CrossInstanceMessage>(payload)
+    private suspend fun processControlMessage(msg: StreamMessage<String, String>) {
+        // Handle room cleanup, instance shutdown, etc.
+        // These are rare but need persistence
+        awaitFuture(
+            redisService.consumerCommands.xack(
+                CROSS_INSTANCE_CONTROL_STREAM,
+                "control_group",
+                msg.id
+            )
+        )
+    }
 
-            // Broadcast to local users in the room
-            val localSessions = SessionManager.getRoomSessions(roomId)
-            localSessions.forEach { session ->
-                try {
-                    session.send(Frame.Text(crossMessage.payload))
-                } catch (e: Exception) {
-                    SessionManager.removeSession(session)
+    /**
+     * Broadcasts to local users only (bounded concurrency)
+     */
+    private suspend fun broadcastToLocalRoom(roomId: String, eventJson: String) = coroutineScope {
+        val sessions = SessionManager.getRoomSessions(roomId)
+        if (sessions.isEmpty()) return@coroutineScope
+
+        val sem = Semaphore(BROADCAST_CONCURRENCY)
+        val jobs = sessions.map { session ->
+            async {
+                sem.withPermit {
+                    try {
+                        session.send(Frame.Text(eventJson))
+                    } catch (e: Exception) {
+                        SessionManager.removeSession(session)
+                    }
                 }
             }
-        } catch (e: Exception) {
-            println("DEBUG: Error handling cross-instance live event: ${e.message}")
         }
+        jobs.forEach { it.join() } // wait for sends to complete (bounded)
     }
 
     /**
      * Stop the cross-instance listener
      */
     fun stop() {
-        listenerJob?.cancel()
+        pubSubListenerJob?.cancel()
+        controlStreamJob?.cancel()
+        pubSubConnection.close()
         scope.cancel()
     }
 

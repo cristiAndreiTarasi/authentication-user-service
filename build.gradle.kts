@@ -56,6 +56,7 @@ dependencies {
     implementation(libs.ktor.server.websockets)
 
     implementation("io.lettuce:lettuce-core:6.5.0.RELEASE")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-jdk8:1.10.2")
 
     implementation("io.ktor:ktor-client-cio:2.3.3")
 
@@ -66,6 +67,9 @@ dependencies {
     implementation("io.ktor:ktor-client-logging:2.3.12")
 
     implementation("com.zaxxer:HikariCP:5.0.1")
+
+
+
 
 
 }
