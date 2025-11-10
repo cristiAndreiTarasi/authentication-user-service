@@ -206,7 +206,7 @@ class CrossInstanceBroadcaster(
         val safeEvent = event.withDefaults()
         val eventJson = LiveEventJson.encodeToString(PolymorphicSerializer(LiveEvent::class), safeEvent)
 
-        // lways broadcast to local users first (lowest latency)
+        // Always broadcast to local users first (lowest latency)
         broadcastToLocalRoom(roomId, eventJson)
 
         // Use Pub/Sub for cross-instance real-time delivery
@@ -353,7 +353,7 @@ class CrossInstanceBroadcaster(
      * Broadcasts to local users only (bounded concurrency)
      */
     private suspend fun broadcastToLocalRoom(roomId: String, eventJson: String) = coroutineScope {
-        val sessions = SessionManager.getRoomSessions(roomId)
+        val sessions = LiveRoomSessionRegistry.getRoomSessions(roomId)
         if (sessions.isEmpty()) return@coroutineScope
 
         val sem = Semaphore(BROADCAST_CONCURRENCY)
@@ -363,7 +363,7 @@ class CrossInstanceBroadcaster(
                     try {
                         session.send(Frame.Text(eventJson))
                     } catch (e: Exception) {
-                        SessionManager.removeSession(session)
+                        LiveRoomSessionRegistry.removeSession(session)
                     }
                 }
             }

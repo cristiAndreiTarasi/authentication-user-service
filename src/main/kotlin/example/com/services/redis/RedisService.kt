@@ -140,9 +140,19 @@ class RedisService(redisUrl: String) {
     * Used for chat moderation, audit logs, suspicious activity
     */
     suspend fun addToModerationStream(event: LiveEvent) {
-        val safe = event.withDefaults()
-        val eventJson = LiveEventJson.encodeToString(PolymorphicSerializer(LiveEvent::class), safe)
-        producerCommands.xadd(MODERATION_STREAM, mapOf("event" to eventJson)).await()
+        println("REDIS: Adding event to moderation stream: ${event::class.simpleName}")
+
+        try {
+            val safe = event.withDefaults()
+            val eventJson = LiveEventJson.encodeToString(PolymorphicSerializer(LiveEvent::class), safe)
+            println("REDIS: Event JSON: $eventJson")
+
+            val result = producerCommands.xadd(MODERATION_STREAM, mapOf("event" to eventJson)).await()
+            println("REDIS: Successfully added event to stream with ID: $result")
+        } catch (e: Exception) {
+            println("REDIS: Error adding event to moderation stream: ${e.message}")
+            throw e
+        }
     }
 
     /**
@@ -201,13 +211,16 @@ class RedisService(redisUrl: String) {
     * Creates a consumer group for a stream if it doesn't exist.
     */
     suspend fun createConsumerGroupIfNotExists(streamKey: String, group: String) {
+        println("REDISSERVICE: inside createConsumerGroupIfNotExists")
         try {
+            println("REDISSERVICE: inside createConsumerGroupIfNotExists try")
             consumerCommands.xgroupCreate(
                 XReadArgs.StreamOffset.from(streamKey, "0-0"),
                 group,
                 XGroupCreateArgs.Builder.mkstream(true)
             ).await()
         } catch (e: RedisCommandExecutionException) {
+            println("REDISSERVICE: inside createConsumerGroupIfNotExists catch")
             if (!e.message.orEmpty().contains("BUSYGROUP")) throw e
         }
     }
@@ -414,6 +427,12 @@ class RedisService(redisUrl: String) {
     // ==================================================
     // KEY-VALUE OPERATIONS
     // ==================================================
+    /**
+     * Simple SET without expiry.
+     */
+    suspend fun set(key: String, value: String) {
+        producerCommands.set(key, value).await()
+    }
 
     /**
     * Sets key with expiry

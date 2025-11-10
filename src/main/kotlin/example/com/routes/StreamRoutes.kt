@@ -11,8 +11,10 @@ import example.com.routes.dtos.StreamSummaryDto
 import example.com.schemas.StreamSchema
 import example.com.schemas.UserSchema
 import example.com.services.gridfs.GridFSService
+import example.com.services.redis.RedisService
 import example.com.services.token.ITokenService
 import example.com.services.token.TokenClaim
+import example.com.services.ws_session.DistributedPermissionManager
 import io.ktor.http.ContentType
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.content.PartData
@@ -46,6 +48,8 @@ fun Route.streamRoutes(
     gridFSService: GridFSService,
     publishTokenService: ITokenService,
     userSchema: UserSchema,
+    distributedPermissionManager: DistributedPermissionManager,
+    redisService: RedisService
 ) {
     authenticate("auth-jwt") {
         // Route to get a specific stream by ID
@@ -104,7 +108,6 @@ fun Route.streamRoutes(
             call.respond(HttpStatusCode.OK, summaries)
         }
 
-
         // Route to get streams by category
         get("/streams/category/{categoryId}") {
             val page = call.parameters["page"]?.toIntOrNull() ?: 1
@@ -158,6 +161,7 @@ fun Route.streamRoutes(
         }
 
         post("/streams/start") {
+            println("DEBUG: ENTER /streams/start handler")
             val principal = call.principal<JWTPrincipal>()
             val role = principal?.payload?.getClaim("role")?.asString()
 
@@ -258,6 +262,75 @@ fun Route.streamRoutes(
             val streamId = streamSchema.create(stream)
             val streamKey = UUID.randomUUID().toString()
             val jti = UUID.randomUUID().toString()
+
+            // After you created streamId, streamKey and persisted publish info:
+            println("DEBUG: about to call setStreamOwner for room=$streamId user=${streamMetaData!!.userId}")
+
+            try {
+                println("DEBUG: calling setStreamOwner(...)")
+                val pingOk = try { redisService.ping() } catch (e: Exception) {
+                    println("ERROR: redis ping failed before setStreamOwner: ${e.message}")
+                    false
+                }
+                println("DEBUG: redis ping before setStreamOwner = $pingOk")
+
+                val userIdStr = streamMetaData!!.userId.toString()
+
+                // 1) Primary: set owner using canonical streamKey (UUID) - this will be used as roomId by clients
+                val successKey = distributedPermissionManager.setStreamOwner(
+                    roomId = streamKey,
+                    userId = userIdStr
+                )
+                println("DEBUG: setStreamOwner returned for streamKey=$streamKey -> $successKey")
+
+                // Persist mapping streamKey -> streamId for server-side resolution
+                try {
+                    redisService.set("streamKey:$streamKey:streamId", streamId.toString())
+                    // Optionally set TTL similar to PERMISSION_TTL if you want mapping to expire:
+                    // redisService.expire("streamKey:$streamKey:streamId", PERMISSION_TTL.seconds)
+                    println("DEBUG: persisted mapping streamKey:$streamKey -> $streamId")
+                } catch (e: Exception) {
+                    println("WARN: failed to persist streamKey->streamId mapping: ${e.message}")
+                }
+
+                // 2) (Optional) Also set numeric owner to keep backwards compatibility for older code during rollout
+                try {
+                    val successNumeric = distributedPermissionManager.setStreamOwner(
+                        roomId = streamId.toString(),
+                        userId = userIdStr
+                    )
+                    println("DEBUG: setStreamOwner returned for numeric streamId=$streamId -> $successNumeric")
+                } catch (e: Exception) {
+                    println("WARN: failed to set numeric owner: ${e.message}")
+                }
+
+                // Read-back verification for the canonical key
+                val readBack = distributedPermissionManager.getStreamOwner(streamKey)
+                println("DEBUG: getStreamOwner read-back for streamKey $streamKey: $readBack")
+
+                if (!successKey) {
+                    println("ERROR: setStreamOwner (streamKey) reported false for room=$streamKey; readBack=$readBack")
+                    // rollback if you require strict atomicity
+                    try { streamSchema.delete(streamId) } catch (_: Throwable) {}
+                    call.respond(
+                        HttpStatusCode.InternalServerError,
+                        CreateStreamResponseDto(message = "Failed to initialize stream permissions.")
+                    )
+                    return@post
+                }
+
+                println("🚀 STREAM OWNER SET: User ${streamMetaData!!.userId} is owner of stream $streamId (streamKey=$streamKey)")
+            } catch (e: Exception) {
+                println("ERROR: exception in /streams/start while setting owner: ${e.message}")
+                e.printStackTrace()
+                // cleanup
+                try { streamSchema.delete(streamId) } catch (_: Throwable) {}
+                call.respond(
+                    HttpStatusCode.InternalServerError,
+                    CreateStreamResponseDto(message = "Stream initialization failed: ${e.message}")
+                )
+                return@post
+            }
 
             val claims = listOf(
                 TokenClaim("userId", streamMetaData!!.userId.toString()),

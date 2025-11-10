@@ -16,6 +16,7 @@ import example.com.schemas.StreamSchema
 import example.com.schemas.TagSchema
 import example.com.schemas.TokenSchema
 import example.com.schemas.UserSchema
+import example.com.services.ServiceManager
 import example.com.services.gridfs.GridFSService
 import example.com.services.hashing.HashingService
 import example.com.services.redis.RedisService
@@ -41,7 +42,8 @@ fun Application.configureRouting(
     publishTokenService: ITokenService,
     redisService: RedisService,
     moderationPublishSecret: String,
-    notificationSchema: NotificationSchema
+    notificationSchema: NotificationSchema,
+    serviceManager: ServiceManager
 ) {
     routing {
         route("/api") {
@@ -57,7 +59,9 @@ fun Application.configureRouting(
 
             streamRoutes(
                 streamSchema, gridFSService,
-                publishTokenService, userSchema
+                publishTokenService, userSchema,
+                serviceManager.distributedPermissionManager,
+                redisService
             )
 
             eventRoutes(
@@ -77,6 +81,7 @@ fun Application.configureRouting(
                 redisService,
                 streamSchema,
                 moderationPublishSecret,
+                serviceManager.distributedPermissionManager
             )
 
             notificationRoutes(

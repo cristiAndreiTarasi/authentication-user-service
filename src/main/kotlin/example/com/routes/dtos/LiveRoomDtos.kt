@@ -174,6 +174,17 @@ sealed class LiveEvent {
         override val initiatorId: String? = null,
         override val timestamp: Long? = null
     ) : LiveEvent()
+
+    @Serializable
+    @SerialName("ModerationAck")
+    data class ModerationAck(
+        override val roomId: String,
+        override val initiatorId: String? = null,
+        override val timestamp: Long? = null,
+        val actionType: String, // "kick", "mute", "unmute", "grant_moderator", "revoke_moderator"
+        val targetUserId: String,
+        val success: Boolean
+    ) : LiveEvent()
 }
 
 // guarantees initiatorId + timestamp even if a call site forgets them
@@ -246,6 +257,10 @@ fun LiveEvent.withDefaults(): LiveEvent {
             timestamp = this.timestamp ?: now
         )
         is LiveEvent.ModerationClearEvent -> this.copy(
+            initiatorId = this.initiatorId ?: "system",
+            timestamp = this.timestamp ?: now
+        )
+        is LiveEvent.ModerationAck -> this.copy(
             initiatorId = this.initiatorId ?: "system",
             timestamp = this.timestamp ?: now
         )

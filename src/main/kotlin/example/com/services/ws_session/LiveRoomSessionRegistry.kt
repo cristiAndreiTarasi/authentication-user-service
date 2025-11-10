@@ -7,7 +7,7 @@ import java.util.concurrent.ConcurrentHashMap
 * Manages WebSocket sessions for live rooms.
 * Tracks which users are in which rooms and their session information.
 */
-object LocalSessionRegistry {
+object LiveRoomSessionRegistry {
     // roomId -> Set of WebSocketSession
     private val roomSessions = ConcurrentHashMap<String, MutableSet<WebSocketSession>>()
     // WebSocketSession -> SessionInfo

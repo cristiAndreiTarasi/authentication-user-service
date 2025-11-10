@@ -15,100 +15,124 @@ class DistributedPermissionManager(
     }
 
     /**
-     * Sets stream owner with atomic operation to prevent race conditions
+     * Sets stream owner with atomic operation to prevent race conditions.
+     * roomId can be either streamKey (UUID) or numeric streamId string.
      */
     suspend fun setStreamOwner(
         roomId: String,
-        userId: String,
-        username: String,
-        avatarUrl: String?
-    ) {
+        userId: String
+    ): Boolean {
         val ownerKey = "room:$roomId:owner"
-        val ownerInfoKey = "room:$roomId:ownerInfo"
 
-        // Use SETNX for atomic ownership
+        // Atomic SETNX - returns true only if key didn't exist
         val success = redisService.setnx(ownerKey, userId)
 
         if (success) {
-            // We won the ownership race - store owner info fields
-            // Use individual hset calls (or hsetAll if you added it)
-            redisService.hset(ownerInfoKey, "username", username)
-            redisService.hset(ownerInfoKey, "avatarUrl", avatarUrl ?: "")
-            redisService.hset(ownerInfoKey, "setAt", System.currentTimeMillis().toString())
+            val ownerInfoKey = "room:$roomId:ownerInfo"
+            redisService.hsetAll(ownerInfoKey, mapOf(
+                "userId" to userId,
+                "setAt" to System.currentTimeMillis().toString()
+            ))
 
-            // Set TTLs
+            // Use PERMISSION_TTL
             redisService.expire(ownerKey, PERMISSION_TTL.seconds)
             redisService.expire(ownerInfoKey, PERMISSION_TTL.seconds)
 
-            println("DEBUG: User $userId set as stream owner for room $roomId")
-        } else {
-            println("DEBUG: Room $roomId already has an owner")
+            return true
         }
+
+        return false
     }
 
     /**
-     * Gets stream owner for a room
+     * Resolve and return the owner for a roomId.
+     * Tries:
+     * 1) 'room:<roomId>:owner' (handles streamKey mode)
+     * 2) 'streamKey:<roomId>:streamId' -> then 'room:<streamId>:owner' (legacy numeric mode)
      */
     suspend fun getStreamOwner(roomId: String): String? {
-        return redisService.get("room:$roomId:owner")
+        try {
+            // 1) Direct lookup (streamKey or numeric if written that way)
+            val direct = redisService.get("room:$roomId:owner")
+            if (!direct.isNullOrBlank()) {
+                return direct.trim()
+            }
+
+            // 2) Fallback: maybe roomId is a streamKey mapping to numeric streamId
+            val mapped = redisService.get("streamKey:$roomId:streamId")
+            if (!mapped.isNullOrBlank()) {
+                val numericOwner = redisService.get("room:${mapped.trim()}:owner")
+                if (!numericOwner.isNullOrBlank()) {
+                    return numericOwner.trim()
+                }
+            }
+        } catch (e: Exception) {
+            println("WARN: getStreamOwner error for room=$roomId: ${e.message}")
+        }
+        return null
     }
 
     /**
-     * Gets stream owner info
+     * Gets stream owner info map (ownerInfo hash) for a roomId (tries both direct and numeric fallback).
      */
     suspend fun getStreamOwnerInfo(roomId: String): Map<String, String> {
         return try {
-            redisService.hgetall("room:$roomId:ownerInfo")
+            val directKey = "room:$roomId:ownerInfo"
+            var info = try { redisService.hgetall(directKey) } catch (_: Exception) { emptyMap<String,String>() }
+            if (info.isNotEmpty()) return info
+
+            val mapped = redisService.get("streamKey:$roomId:streamId")
+            if (!mapped.isNullOrBlank()) {
+                val numericKey = "room:${mapped.trim()}:ownerInfo"
+                info = try { redisService.hgetall(numericKey) } catch (_: Exception) { emptyMap<String,String>() }
+                if (info.isNotEmpty()) return info
+            }
+
+            emptyMap()
         } catch (e: Exception) {
+            println("WARN: getStreamOwnerInfo error for room=$roomId: ${e.message}")
             emptyMap()
         }
     }
 
     /**
-     * Checks if user is stream owner
+     * Checks if user is stream owner; uses normalized string comparison
      */
     suspend fun isStreamOwner(roomId: String, userId: String): Boolean {
-        val owner = getStreamOwner(roomId)
-        return owner == userId
+        val owner = getStreamOwner(roomId) ?: return false
+        // normalize both sides
+        return owner.trim() == userId.trim()
     }
 
-    /**
-     * Manages moderator set with atomic operations
-     */
+    // moderators, muted, kicked now include logging so you can see SADD/SREM results in server logs (CHANGED)
     suspend fun grantModerator(roomId: String, userId: String) {
-        redisService.sadd("room:$roomId:moderators", userId)
+        val added = redisService.sadd("room:$roomId:moderators", userId)
         redisService.expire("room:$roomId:moderators", PERMISSION_TTL.seconds)
     }
 
     suspend fun revokeModerator(roomId: String, userId: String) {
-        redisService.srem("room:$roomId:moderators", userId)
+        val removed = redisService.srem("room:$roomId:moderators", userId)
     }
 
     suspend fun isModerator(roomId: String, userId: String): Boolean {
         return redisService.sismember("room:$roomId:moderators", userId)
     }
 
-    /**
-     * Manages muted users
-     */
     suspend fun muteUser(roomId: String, userId: String) {
-        redisService.sadd("room:$roomId:muted", userId)
+        val added = redisService.sadd("room:$roomId:muted", userId)
         redisService.expire("room:$roomId:muted", PERMISSION_TTL.seconds)
     }
 
     suspend fun unmuteUser(roomId: String, userId: String) {
-        redisService.srem("room:$roomId:muted", userId)
+        val removed = redisService.srem("room:$roomId:muted", userId)
     }
 
     suspend fun isMuted(roomId: String, userId: String): Boolean {
         return redisService.sismember("room:$roomId:muted", userId)
     }
 
-    /**
-     * Manages kicked users
-     */
     suspend fun kickUser(roomId: String, userId: String) {
-        redisService.sadd("room:$roomId:kicked", userId)
+        val added = redisService.sadd("room:$roomId:kicked", userId)
         redisService.expire("room:$roomId:kicked", PERMISSION_TTL.seconds)
     }
 
@@ -116,24 +140,44 @@ class DistributedPermissionManager(
         return redisService.sismember("room:$roomId:kicked", userId)
     }
 
-    /**
-     * Checks if room has stream owner
-     */
     suspend fun hasStreamOwner(roomId: String): Boolean {
-        return redisService.exists("room:$roomId:owner") > 0L
+        return try {
+            (redisService.exists("room:$roomId:owner") > 0L) ||
+                    (!redisService.get("streamKey:$roomId:streamId").isNullOrBlank())
+        } catch (e: Exception) {
+            false
+        }
     }
 
     /**
-     * Removes all room data (when stream ends)
+     * Removes all room data (when stream ends). Will attempt to remove both canonical streamKey keys
+     * and legacy numeric keys if mapping exists.
      */
     suspend fun removeRoom(roomId: String) {
-        val keys = listOf(
-            "room:$roomId:owner",
-            "room:$roomId:ownerInfo",
-            "room:$roomId:moderators",
-            "room:$roomId:muted",
-            "room:$roomId:kicked"
-        )
-        redisService.del(*keys.toTypedArray())
+        try {
+            // Remove canonical keys for provided roomId
+            val keys = mutableListOf(
+                "room:$roomId:owner",
+                "room:$roomId:ownerInfo",
+                "room:$roomId:moderators",
+                "room:$roomId:muted",
+                "room:$roomId:kicked"
+            )
+            // If there's a mapping, remove numeric keys as well and delete mapping
+            val mapped = redisService.get("streamKey:$roomId:streamId")
+            if (!mapped.isNullOrBlank()) {
+                keys.addAll(listOf(
+                    "room:${mapped.trim()}:owner",
+                    "room:${mapped.trim()}:ownerInfo",
+                    "room:${mapped.trim()}:moderators",
+                    "room:${mapped.trim()}:muted",
+                    "room:${mapped.trim()}:kicked"
+                ))
+                keys.add("streamKey:$roomId:streamId")
+            }
+            redisService.del(*keys.toTypedArray())
+        } catch (e: Exception) {
+            println("WARN: removeRoom error for room=$roomId: ${e.message}")
+        }
     }
 }

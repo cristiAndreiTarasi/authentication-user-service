@@ -22,9 +22,6 @@ import example.com.services.redis.RedisService
 import example.com.services.role.RoleService
 import example.com.services.token.TokenConfig
 import example.com.services.token.TokenService
-import example.com.services.ws_session.CrossInstanceBroadcaster
-import example.com.services.ws_session.DistributedPermissionManager
-import example.com.services.ws_session.DistributedSessionManager
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.application.Application
 import io.ktor.server.application.ApplicationStopping
@@ -36,7 +33,6 @@ import io.ktor.server.routing.route
 import io.ktor.server.routing.routing
 import org.litote.kmongo.KMongo
 import java.time.Duration
-import java.util.UUID
 import javax.sql.DataSource
 
 fun main(args: Array<String>): Unit = EngineMain.main(args)
@@ -87,14 +83,6 @@ fun Application.module() {
     val port = environment.config.property("db.redis.port").getString()
     val redisService = RedisService("redis://$host:$port")
 
-    // Generate unique instance ID for distributed tracking
-    val instanceId = System.getenv("HOSTNAME") ?: "instance-${UUID.randomUUID().toString().take(8)}"
-
-    // Initialize distributed managers at application level
-    val distributedSessionManager = DistributedSessionManager(redisService, instanceId)
-    val distributedPermissionManager = DistributedPermissionManager(redisService)
-    val crossInstanceBroadcaster = CrossInstanceBroadcaster(redisService, instanceId)
-
     //moderation
     val moderationPublishSecret = environment.config.property("jwt.moderation.publishSecret").getString()
 
@@ -140,6 +128,7 @@ fun Application.module() {
         hashingService, dataSource, gridFsService,
         httpClient, authTokenService, publishTokenService,
         redisService, moderationPublishSecret, notificationSchema,
+        serviceManager
     )
 
     // Health check endpoint for monitoring

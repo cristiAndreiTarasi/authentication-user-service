@@ -9,8 +9,8 @@ import example.com.routes.dtos.LiveEvent
 import example.com.routes.dtos.withDefaults
 import example.com.schemas.StreamSchema
 import example.com.services.redis.RedisService
-import example.com.services.ws_session.PermissionManager
-import example.com.services.ws_session.SessionManager
+import example.com.services.ws_session.DistributedPermissionManager
+import example.com.services.ws_session.LiveRoomSessionRegistry
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.application.*
 import io.ktor.server.request.*
@@ -55,7 +55,8 @@ data class StreamStatusResponse(
 fun Route.moderationRoutes(
     redisManager: RedisService,
     streamSchema: StreamSchema,
-    moderationPublishSecret: String
+    moderationPublishSecret: String,
+    distributedPermissionManager: DistributedPermissionManager
 ) {
     // Resolve a canonical room id (prefer streamKey). Accept either a streamKey or numeric streamId in the path.
     suspend fun resolveRoomIdParam(param: String): String {
@@ -110,13 +111,13 @@ fun Route.moderationRoutes(
                 redisManager.addToModerationStream(warningEvent)
 
                 // Immediate low-latency per-session dispatch using same timestamp
-                val sessions = SessionManager.getRoomSessions(roomId).toList()
-                val streamOwnerId = PermissionManager.getStreamOwner(roomId)
+                val sessions = LiveRoomSessionRegistry.getRoomSessions(roomId).toList()
+                val streamOwnerId = distributedPermissionManager.getStreamOwner(roomId)
                 val liveEventPolymorphic = PolymorphicSerializer(LiveEvent::class)
 
                 sessions.forEach { session ->
                     try {
-                        val sessionUserId = SessionManager.getUserId(session)
+                        val sessionUserId = LiveRoomSessionRegistry.getUserId(session)
                         val isStreamer = sessionUserId == streamOwnerId
 
                         // Choose final message text for streamer vs viewers
@@ -131,7 +132,7 @@ fun Route.moderationRoutes(
                         val json = LiveEventJson.encodeToString(liveEventPolymorphic, userSpecificEvent.withDefaults())
                         session.send(Frame.Text(json))
                     } catch (e: Exception) {
-                        try { SessionManager.removeSession(session) } catch (_: Exception) {}
+                        try { LiveRoomSessionRegistry.removeSession(session) } catch (_: Exception) {}
                     }
                 }
 
@@ -261,7 +262,7 @@ fun Route.moderationRoutes(
                     return@get
                 }
 
-                val sessionCount = SessionManager.getRoomSessions(roomId).size
+                val sessionCount = LiveRoomSessionRegistry.getRoomSessions(roomId).size
                 val metadata = redisManager.getStreamMetadata(roomId)
                 val isAudioOnly = metadata["proxy_type"] == "audio_only"
                 val audioUrl = metadata["audio_url"]

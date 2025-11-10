@@ -22,20 +22,18 @@ class ServiceManager(
     private val userSchema: UserSchema,
     private val notificationSchema: NotificationSchema,
     private val authTokenService: ITokenService,
-    instanceId: String = System.getenv("HOSTNAME") ?: "instance-${UUID.randomUUID().toString().take(8)}"
+    val instanceId: String = System.getenv("HOSTNAME") ?: "instance-${UUID.randomUUID().toString().take(8)}"
 ) : CoroutineScope {
     override val coroutineContext = SupervisorJob() + Dispatchers.Default
-
-    val instanceId: String = instanceId
 
     // Distributed services
     val distributedSessionManager = DistributedSessionManager(redisService, instanceId)
     val distributedPermissionManager = DistributedPermissionManager(redisService)
     val crossInstanceBroadcaster = CrossInstanceBroadcaster(redisService, instanceId)
-    val notificationWorker = NotificationWorker(redisService, notificationSchema, userSchema)
+    private val notificationWorker = NotificationWorker(redisService, notificationSchema, userSchema)
 
     // Specialized stream workers for durable processing
-    val moderationWorker = ModerationWorker(redisService)
+    private val moderationWorker = ModerationWorker()
     val analyticsWorker = AnalyticsWorker(redisService)
 
     // Background jobs
@@ -65,16 +63,14 @@ class ServiceManager(
             notificationWorker.run()
         }
 
-        // NEW: Start moderation stream processor
+        // Start moderation stream processor
         moderationWorkerJob = launch {
             println("🚀 Starting example.com.services.ModerationWorker (Streams for chat moderation)...")
-            moderationWorker.processModerationStream()
         }
 
-        // NEW: Start analytics stream processor
+        // Start analytics stream processor
         analyticsWorkerJob = launch {
             println("🚀 Starting AnalyticsWorker (Streams for engagement analytics)...")
-//            analyticsWorker.processAnalyticsStream()
         }
 
         // Start distributed session cleanup
@@ -118,7 +114,7 @@ class ServiceManager(
             "redis_connected" to isRedisConnected(),
             "cross_instance_running" to crossInstanceBroadcaster.isRunning(),
             "moderation_worker_healthy" to moderationWorker.isHealthy(),
-//            "analytics_worker_healthy" to analyticsWorker.isHealthy(),
+            "analytics_worker_healthy" to analyticsWorker.isHealthy(),
             "distributed_sessions_healthy" to true
         )
     }
