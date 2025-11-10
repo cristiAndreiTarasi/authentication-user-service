@@ -1,7 +1,7 @@
 package example.com.services.ws_session
 
-import example.com.LiveEventJson
-import example.com.NotificationEventJson
+import example.com.config.AppJson
+import example.com.config.awaitFuture
 import example.com.routes.dtos.LiveEvent
 import example.com.routes.dtos.NotificationEvent
 import example.com.routes.dtos.withDefaults
@@ -9,7 +9,6 @@ import example.com.services.notifications.NotificationSessionRegistry
 import example.com.services.redis.RedisService
 import io.ktor.websocket.Frame
 import io.lettuce.core.Consumer
-import io.lettuce.core.RedisFuture
 import io.lettuce.core.StreamMessage
 import io.lettuce.core.XReadArgs
 import io.lettuce.core.pubsub.RedisPubSubListener
@@ -23,16 +22,13 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.serialization.PolymorphicSerializer
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.sync.Semaphore
-import kotlinx.coroutines.sync.withPermit
-import kotlin.coroutines.resume
-import kotlin.coroutines.resumeWithException
-import kotlin.coroutines.suspendCoroutine
 
 @Serializable
 data class CrossInstanceMessage(
@@ -52,7 +48,7 @@ class CrossInstanceBroadcaster(
     private val redisService: RedisService,
     private val instanceId: String
 ) {
-    private val json = Json { ignoreUnknownKeys = true }
+    private val json: Json = AppJson
 
     // Using Pub/Sub channels instead of Streams for real-time events
     private val ROOM_EVENTS_PREFIX = "room_events:"
@@ -71,30 +67,8 @@ class CrossInstanceBroadcaster(
     private val BROADCAST_CONCURRENCY = 100
 
     // Create dedicated Pub/Sub connections
-    private val pubSubConnection: StatefulRedisPubSubConnection<String, String> =
-        redisService.redisClient.connectPubSub()
+    private val pubSubConnection: StatefulRedisPubSubConnection<String, String> = redisService.redisClient.connectPubSub()
 
-    /**
-     * Small helper to await Lettuce RedisFuture in this class
-     */
-    private suspend fun <T> awaitFuture(future: RedisFuture<T>): T =
-        suspendCoroutine { cont ->
-            when {
-                future.isDone -> {
-                    try {
-                        cont.resume(future.get())
-                    } catch (e: Exception) {
-                        cont.resumeWithException(e)
-                    }
-                }
-                future.isCancelled -> cont.resumeWithException(java.util.concurrent.CancellationException("RedisFuture cancelled"))
-                else -> {
-                    future.handle { res, err ->
-                        if (err != null) cont.resumeWithException(err) else cont.resume(res)
-                    }
-                }
-            }
-        }
 
     /**
      * CHANGE: Starts Pub/Sub listener for real-time cross-instance events
@@ -204,7 +178,7 @@ class CrossInstanceBroadcaster(
      */
     suspend fun broadcastToRoom(roomId: String, event: LiveEvent) {
         val safeEvent = event.withDefaults()
-        val eventJson = LiveEventJson.encodeToString(PolymorphicSerializer(LiveEvent::class), safeEvent)
+        val eventJson = json.encodeToString(PolymorphicSerializer(LiveEvent::class), safeEvent)
 
         // Always broadcast to local users first (lowest latency)
         broadcastToLocalRoom(roomId, eventJson)
@@ -222,7 +196,10 @@ class CrossInstanceBroadcaster(
 
         try {
             // Use Pub/Sub for real-time events
-            awaitFuture(redisService.producerCommands.publish("${ROOM_EVENTS_PREFIX}$roomId", messageJson))
+            redisService.producerCommands.publish(
+                "${ROOM_EVENTS_PREFIX}$roomId",
+                messageJson
+            ).awaitFuture()
         } catch (e: Exception) {
             println("DEBUG: Failed to publish room event: ${e.message}")
         }
@@ -261,7 +238,7 @@ class CrossInstanceBroadcaster(
      */
     suspend fun sendToUser(userId: Int, event: NotificationEvent) {
         val safeEvent = event.withDefaults()
-        val eventJson = NotificationEventJson.encodeToString(safeEvent)
+        val eventJson = json.encodeToString(safeEvent)
 
         // Try local delivery first
         val localDelivered = NotificationSessionRegistry.sendToUser(userId, eventJson)
@@ -279,7 +256,10 @@ class CrossInstanceBroadcaster(
             val messageJson = json.encodeToString(CrossInstanceMessage.serializer(), crossInstanceMessage)
             try {
                 // CHANGE: Using Pub/Sub instead of publish command
-                awaitFuture(redisService.producerCommands.publish(USER_NOTIFICATIONS_CHANNEL, messageJson))
+                redisService.producerCommands.publish(
+                    USER_NOTIFICATIONS_CHANNEL,
+                    messageJson
+                ).awaitFuture()
             } catch (e: Exception) {
                 println("DEBUG: Failed to publish user notification: ${e.message}")
             }
@@ -322,11 +302,11 @@ class CrossInstanceBroadcaster(
 
         while (isActive) {
             try {
-                val messages = awaitFuture(redisService.consumerCommands.xreadgroup(
+                val messages = redisService.consumerCommands.xreadgroup(
                     Consumer.from("control_group", instanceId),
                     XReadArgs.Builder.block(500).count(10),
                     XReadArgs.StreamOffset.from(CROSS_INSTANCE_CONTROL_STREAM, ">")
-                ))
+                ).awaitFuture()
 
                 messages?.forEach { msg ->
                     processControlMessage(msg)
@@ -340,13 +320,11 @@ class CrossInstanceBroadcaster(
     private suspend fun processControlMessage(msg: StreamMessage<String, String>) {
         // Handle room cleanup, instance shutdown, etc.
         // These are rare but need persistence
-        awaitFuture(
-            redisService.consumerCommands.xack(
-                CROSS_INSTANCE_CONTROL_STREAM,
-                "control_group",
-                msg.id
-            )
-        )
+        redisService.consumerCommands.xack(
+            CROSS_INSTANCE_CONTROL_STREAM,
+            "control_group",
+            msg.id
+        ).awaitFuture()
     }
 
     /**

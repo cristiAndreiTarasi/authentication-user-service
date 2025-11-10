@@ -1,6 +1,6 @@
 package example.com.services.notifications
 
-import example.com.NotificationEventJson
+import example.com.config.AppJson
 import example.com.ProfileUpdateType
 import example.com.SocialEventType
 import example.com.routes.dtos.NotificationEvent
@@ -39,7 +39,7 @@ class NotificationWorker(
     private val consumerId: String = "notif-consumer-${System.getenv("HOSTNAME") ?: "local"}",
     private val streamKey: String = "social_events"
 ) {
-    private val json = Json { ignoreUnknownKeys = true }
+    private val json: Json = AppJson
 
     // Tunables — experiment with these numbers
     private val XREAD_BLOCK_MS = 500L       // reduced from 5000
@@ -261,7 +261,7 @@ class NotificationWorker(
                             text = storedText
                         ).withDefaults()
 
-                        val eventJson = NotificationEventJson.encodeToString(liveEvent)
+                        val eventJson = json.encodeToString(liveEvent)
                         // Try best-effort: sendToUser is suspend; if user is offline this is fast (returns false)
                         NotificationSessionRegistry.sendToUser(followerId, eventJson)
                     } catch (e: Exception) {
@@ -300,7 +300,7 @@ class NotificationWorker(
             text = storedText
         ).withDefaults()
 
-        val eventJson = NotificationEventJson.encodeToString(followEvent)
+        val eventJson = json.encodeToString(followEvent)
         NotificationSessionRegistry.sendToUser(targetIdInt, eventJson)
 
         // Send profile updates (do in IO)
@@ -338,9 +338,7 @@ class NotificationWorker(
             userIds = userIds
         ).withDefaults()
 
-        val eventJson = NotificationEventJson.encodeToString(profileEvent)
+        val eventJson = json.encodeToString(profileEvent)
         NotificationSessionRegistry.sendToUser(userId, eventJson)
     }
 }
-
-

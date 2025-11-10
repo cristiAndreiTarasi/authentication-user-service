@@ -1,17 +1,16 @@
 package example.com.plugins
 
-import example.com.LiveEventJson
+import example.com.config.AppJson
 import example.com.ModerationMessages
 import example.com.ModerationReason
 import example.com.ModerationSeverity
-import example.com.NotificationEventJson
 import example.com.ProfileUpdateType
-import example.com.services.ServiceManager
 import example.com.routes.dtos.LiveEvent
 import example.com.routes.dtos.NotificationEvent
 import example.com.routes.dtos.withDefaults
 import example.com.schemas.NotificationSchema
 import example.com.schemas.UserSchema
+import example.com.services.ServiceManager
 import example.com.services.notifications.NotificationSessionRegistry
 import example.com.services.redis.RedisService
 import example.com.services.token.TokenService
@@ -33,6 +32,7 @@ import io.ktor.websocket.close
 import io.ktor.websocket.readText
 import kotlinx.coroutines.delay
 import kotlinx.serialization.PolymorphicSerializer
+import kotlinx.serialization.json.Json
 import java.time.Duration
 
 /**
@@ -56,6 +56,9 @@ fun Application.configureSockets(
         maxFrameSize = Long.MAX_VALUE
         masking      = false
     }
+
+    val LiveEventJson: Json = AppJson
+    val NotificationEventJson: Json = AppJson
 
     // Extract services from container for cleaner code
     val distributedSessionManager = serviceManager.distributedSessionManager

@@ -1,6 +1,6 @@
 package example.com.routes
 
-import example.com.LiveEventJson
+import example.com.config.AppJson
 import example.com.ModerationMessages
 import example.com.ModerationReason
 import example.com.ModerationSeverity
@@ -19,6 +19,7 @@ import io.ktor.server.routing.*
 import io.ktor.websocket.Frame
 import kotlinx.serialization.PolymorphicSerializer
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.Json
 
 @Serializable
 data class ModerationWarningRequest(
@@ -127,6 +128,7 @@ fun Route.moderationRoutes(
                             ModerationMessages.getWarningMessage(request.severity, request.reason)
                         }
 
+                        val LiveEventJson: Json = AppJson
                         // send a copy of the same event but with user-specific message
                         val userSpecificEvent = warningEvent.copy(message = finalMessage)
                         val json = LiveEventJson.encodeToString(liveEventPolymorphic, userSpecificEvent.withDefaults())

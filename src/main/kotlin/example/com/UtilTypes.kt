@@ -38,12 +38,6 @@ val WS_JSON = Json {
     classDiscriminator = "type"
 }
 
-val appJson = Json {
-    prettyPrint = true
-    isLenient = true
-    ignoreUnknownKeys = true
-}
-
 enum class ProfileUpdateType {
     FOLLOWERS,
     FOLLOWING,

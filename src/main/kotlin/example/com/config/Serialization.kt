@@ -1,90 +1,68 @@
 package example.com.config
 
-import kotlinx.serialization.ExperimentalSerializationApi
-import kotlinx.serialization.KSerializer
-import kotlinx.serialization.Serializer
-import kotlinx.serialization.descriptors.PrimitiveKind
-import kotlinx.serialization.descriptors.PrimitiveSerialDescriptor
-import kotlinx.serialization.descriptors.SerialDescriptor
-import kotlinx.serialization.encoding.Decoder
-import kotlinx.serialization.encoding.Encoder
-import org.bson.types.ObjectId
-import java.time.Instant
-import java.time.LocalDate
-import java.time.LocalDateTime
-import java.time.format.DateTimeFormatter
-import java.util.Base64
+import example.com.routes.dtos.LiveEvent
+import example.com.routes.dtos.NotificationEvent
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.modules.*
 
-@OptIn(ExperimentalSerializationApi::class)
-@Serializer(forClass = Instant::class)
-object InstantSerializer : KSerializer<Instant> {
-    override fun serialize(encoder: Encoder, value: Instant) {
-        encoder.encodeString(value.toString())
-    }
-
-    override fun deserialize(decoder: Decoder): Instant {
-        return Instant.parse(decoder.decodeString())
-    }
-}
-
-object LocalDateTimeSerializer : KSerializer<LocalDateTime> {
-    private val formatter = DateTimeFormatter.ISO_LOCAL_DATE_TIME
-
-    override val descriptor: SerialDescriptor =
-        PrimitiveSerialDescriptor("LocalDateTimeSerializer", PrimitiveKind.STRING)
-
-    override fun serialize(encoder: Encoder, value: LocalDateTime) {
-        val str = value.format(formatter)
-        encoder.encodeString(str)
-    }
-
-    override fun deserialize(decoder: Decoder): LocalDateTime {
-        val str = decoder.decodeString()
-        return LocalDateTime.parse(str, formatter)
+/**
+ * JSON configuration for serializing/deserializing LiveEvent objects.
+ * Uses polymorphic serialization to handle different types of live streaming events.
+ */
+val LiveEventJson = SerializersModule {
+    polymorphic(LiveEvent::class) {
+        // Register ALL LiveEvent subclasses for polymorphic serialization
+        subclass(LiveEvent.JoinRoom::class)
+        subclass(LiveEvent.LeaveRoom::class)
+        subclass(LiveEvent.ChatMessage::class)
+        subclass(LiveEvent.Like::class)
+        subclass(LiveEvent.Gift::class)
+        subclass(LiveEvent.KickUser::class)
+        subclass(LiveEvent.MuteUser::class)
+        subclass(LiveEvent.UnmuteUser::class)
+        subclass(LiveEvent.GrantModerator::class)
+        subclass(LiveEvent.RevokeModerator::class)
+        subclass(LiveEvent.StreamStats::class)
+        subclass(LiveEvent.PublisherInfoEvent::class)
+        subclass(LiveEvent.StreamEndedEvent::class)
+        subclass(LiveEvent.SystemMessage::class)
+        subclass(LiveEvent.ModerationWarningEvent::class)
+        subclass(LiveEvent.StreamTerminatedEvent::class)
+        subclass(LiveEvent.ModerationClearEvent::class)
+        subclass(LiveEvent.ModerationAck::class)
     }
 }
 
-@OptIn(ExperimentalSerializationApi::class)
-object ObjectIdSerializer : KSerializer<ObjectId> {
-    override val descriptor = PrimitiveSerialDescriptor("ObjectId", PrimitiveKind.STRING)
-
-    override fun serialize(encoder: Encoder, value: ObjectId) {
-        encoder.encodeString(value.toHexString())
-    }
-
-    override fun deserialize(decoder: Decoder): ObjectId {
-        return ObjectId(decoder.decodeString())
-    }
-}
-
-object LocalDateSerializer : KSerializer<LocalDate> {
-    private val formatter = DateTimeFormatter.ofPattern("d MMM yyyy")
-
-    override val descriptor: SerialDescriptor = PrimitiveSerialDescriptor("LocalDate", PrimitiveKind.STRING)
-
-    override fun serialize(encoder: Encoder, value: LocalDate) {
-        val string = value.format(formatter)
-        encoder.encodeString(string)
-    }
-
-    override fun deserialize(decoder: Decoder): LocalDate {
-        val string = decoder.decodeString()
-        return LocalDate.parse(string, formatter)
+/**
+ * JSON configuration for serializing/deserializing NotificationEvent objects.
+ * Handles different types of user notification events.
+ */
+val NotificationEventJson = SerializersModule {
+    polymorphic(NotificationEvent::class) {
+        subclass(NotificationEvent.Follow::class)
+        subclass(NotificationEvent.InitialState::class)
+        subclass(NotificationEvent.MarkRead::class)
+        subclass(NotificationEvent.ProfileUpdate::class)
+        subclass(NotificationEvent.UserIsLive::class)
     }
 }
 
-object ByteArrayAsBase64Serializer : KSerializer<ByteArray> {
-    override val descriptor: SerialDescriptor =
-        PrimitiveSerialDescriptor("ByteArrayAsBase64", PrimitiveKind.STRING)
+private fun createAppJson(): Json {
+    // Combine modules so a single Json knows how to handle both polymorphic hierarchies
+    val combinedModule = LiveEventJson + NotificationEventJson
 
-    override fun serialize(encoder: Encoder, value: ByteArray) {
-        val encoded = Base64.getEncoder().encodeToString(value)
-        encoder.encodeString(encoded)
-    }
-
-    override fun deserialize(decoder: Decoder): ByteArray {
-        val encoded = decoder.decodeString()
-        return Base64.getDecoder().decode(encoded)
+    return Json {
+        ignoreUnknownKeys = true // Ignore unknown fields for forward compatibility
+        classDiscriminator = "type" // Use "type" field to distinguish between event types
+        encodeDefaults = true
+        prettyPrint = true
+        isLenient = true
+        serializersModule = combinedModule
     }
 }
 
+/**
+ * Convenience single instance you can import/use across the app.
+ * For tests / multi-instance boot you may prefer to call createAppJson() explicitly.
+ */
+val AppJson: Json = createAppJson()

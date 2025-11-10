@@ -1,6 +1,7 @@
 package example.com
 
 import com.zaxxer.hikari.HikariDataSource
+import example.com.config.AppJson
 import example.com.config.Constants
 import example.com.plugins.configureHTTP
 import example.com.plugins.configureRouting
@@ -38,7 +39,7 @@ import javax.sql.DataSource
 fun main(args: Array<String>): Unit = EngineMain.main(args)
 
 fun Application.module() {
-    val httpClient = createHttpClient(appJson)
+    val httpClient = createHttpClient(AppJson)
 
     // val mongoDatabase: MongoDatabase = connectToMongoDB()
     val mongoClient = KMongo.createClient(Constants.CONNECTION_STRING)
@@ -113,7 +114,7 @@ fun Application.module() {
     serviceManager.startAllServices()
 
     configureSecurity(authTokenConfig)
-    configureSerialization(appJson)
+    configureSerialization(AppJson)
     configureHTTP()
     configureSockets(
         redisService,
