@@ -1,15 +1,13 @@
 package example.com.services.ws_session
 
 import io.ktor.websocket.WebSocketSession
-import org.litote.kmongo.MongoOperator
 import java.util.concurrent.ConcurrentHashMap
-import java.util.concurrent.CopyOnWriteArraySet
 
 /**
 * Manages WebSocket sessions for live rooms.
 * Tracks which users are in which rooms and their session information.
 */
-object SessionManager {
+object LocalSessionRegistry {
     // roomId -> Set of WebSocketSession
     private val roomSessions = ConcurrentHashMap<String, MutableSet<WebSocketSession>>()
     // WebSocketSession -> SessionInfo
