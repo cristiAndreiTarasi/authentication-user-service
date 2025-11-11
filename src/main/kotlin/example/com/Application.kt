@@ -20,6 +20,7 @@ import example.com.services.ServiceManager
 import example.com.services.gridfs.GridFSService
 import example.com.services.hashing.HashingService
 import example.com.services.redis.RedisService
+import example.com.services.redis.RedisStreams
 import example.com.services.role.RoleService
 import example.com.services.token.TokenConfig
 import example.com.services.token.TokenService
@@ -102,7 +103,7 @@ fun Application.module() {
 
     val notificationSchema = NotificationSchema(dataSource)
 
-    // initialize all distributed services
+    // Initialize service manager BEFORE configuring sockets and routing
     val serviceManager = ServiceManager(
         redisService = redisService,
         userSchema = userSchema,
@@ -151,8 +152,12 @@ fun Application.module() {
             get("/redis") {
                 val isConnected = redisService.ping()
                 val redisInfo = mapOf(
-                    "connected" to isConnected,
-                    "instanceId" to serviceManager.instanceId
+                    "chat_stream" to RedisStreams.CHAT_STREAM,
+                    "moderation_stream" to RedisStreams.MODERATION_STREAM,
+                    "analytics_stream" to RedisStreams.ANALYTICS_STREAM,
+                    "billing_stream" to RedisStreams.BILLING_STREAM,
+                    "social_stream" to RedisStreams.SOCIAL_STREAM,
+                    "instance_id" to serviceManager.instanceId
                 )
                 call.respond(redisInfo)
             }

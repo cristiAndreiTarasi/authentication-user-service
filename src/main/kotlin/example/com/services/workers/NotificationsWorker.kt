@@ -1,4 +1,4 @@
-package example.com.services.notifications
+package example.com.services.workers
 
 import example.com.config.AppJson
 import example.com.ProfileUpdateType
@@ -7,6 +7,7 @@ import example.com.routes.dtos.NotificationEvent
 import example.com.routes.dtos.withDefaults
 import example.com.schemas.NotificationSchema
 import example.com.schemas.UserSchema
+import example.com.services.notifications.NotificationSessionRegistry
 import example.com.services.redis.RedisService
 import example.com.services.redis.SocialEvent
 import io.lettuce.core.Consumer

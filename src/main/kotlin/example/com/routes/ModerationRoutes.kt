@@ -73,6 +73,19 @@ fun Route.moderationRoutes(
         }
     }
 
+    // Create JSON serializer for LiveEvent
+    val LiveEventJson: Json = AppJson
+    val liveEventPolymorphic = PolymorphicSerializer(LiveEvent::class)
+
+    /**
+     * Helper function to encode LiveEvent to JSON and add to categorized stream
+     */
+    suspend fun addModerationEventToStream(event: LiveEvent) {
+        val safeEvent = event.withDefaults()
+        val eventJson = LiveEventJson.encodeToString(liveEventPolymorphic, safeEvent)
+        redisManager.addToModerationStream(event, eventJson)
+    }
+
     route("/internal/moderation") {
         fun authenticateModerationRequest(call: ApplicationCall): Boolean {
             val providedSecret = call.request.headers["X-Moderation-Secret"]
@@ -109,7 +122,7 @@ fun Route.moderationRoutes(
                     timestamp = nowMs
                 )
 
-                redisManager.addToModerationStream(warningEvent)
+                addModerationEventToStream(warningEvent)
 
                 // Immediate low-latency per-session dispatch using same timestamp
                 val sessions = LiveRoomSessionRegistry.getRoomSessions(roomId).toList()
@@ -168,7 +181,7 @@ fun Route.moderationRoutes(
                 val roomId = resolveRoomIdParam(rawParam)
                 val clearEvent = LiveEvent.ModerationClearEvent(roomId = roomId)
 
-                redisManager.addToModerationStream(clearEvent)
+                addModerationEventToStream(clearEvent)
 
                 call.respond(HttpStatusCode.OK, ModerationActionResponse(
                     success = true,
@@ -205,7 +218,7 @@ fun Route.moderationRoutes(
                     message = message
                 )
 
-                redisManager.addToModerationStream(terminationEvent)
+                addModerationEventToStream(terminationEvent)
 
                 // Update DB: mark terminated. If caller passed numeric id use it, otherwise look up stream by streamKey
                 val numeric = rawParam.toIntOrNull()

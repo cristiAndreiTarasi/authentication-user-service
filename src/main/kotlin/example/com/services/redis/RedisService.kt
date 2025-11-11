@@ -45,6 +45,7 @@ data class SocialEvent(
 *
 * Added explicit methods for Pub/Sub and separate Streams for different workflows
 */
+// RedisService.kt
 class RedisService(redisUrl: String) {
     val redisClient: RedisClient = RedisClient.create(redisUrl)
 
@@ -55,47 +56,17 @@ class RedisService(redisUrl: String) {
     private val _producerCommands: RedisAsyncCommands<String, String> = producerConnection.async()
     private val _consumerCommands: RedisAsyncCommands<String, String> = consumerConnection.async()
 
-    // expose for advanced usage (workers)
     val producerCommands: RedisAsyncCommands<String, String> get() = _producerCommands
     val consumerCommands: RedisAsyncCommands<String, String> get() = _consumerCommands
 
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-
-    // Use a stable consumer ID
     private val consumerId = "consumer-${System.getenv("HOSTNAME") ?: "default"}"
     private val json: Json = AppJson
 
     companion object {
-        // Separate streams for different durable workflows
-        const val MODERATION_STREAM = "moderation_events"
-        const val ANALYTICS_STREAM = "analytics_events"
-        const val BILLING_STREAM = "billing_events"
-        const val SOCIAL_STREAM = "social_events"
-
-        // CHANGE: Pub/Sub channels for real-time events
-        const val ROOM_EVENTS_PREFIX = "room_events:"
-        const val USER_NOTIFICATIONS_CHANNEL = "user_notifications"
-
         private const val MAX_HISTORY = 100
-    }
-
-    // ==================================================
-    // PUB/SUB OPERATIONS (REAL-TIME, EPHEMERAL)
-    // ==================================================
-    /**
-    * Publish real-time event to a room channel
-    * Used for instant delivery of chat, likes, joins, etc.
-    */
-    suspend fun publishToRoom(roomId: String, eventJson: String) {
-        producerCommands.publish("${ROOM_EVENTS_PREFIX}$roomId", eventJson).awaitFuture()
-    }
-
-    /**
-    * Publish user notification
-    * Used for cross-instance user notifications
-    */
-    suspend fun publishToUser(userId: String, eventJson: String) {
-        producerCommands.publish(USER_NOTIFICATIONS_CHANNEL, eventJson).awaitFuture()
+        private const val COUNTER_TTL_HOURS = 24L
+        private const val SESSION_TTL_HOURS = 2L
     }
 
     // ==================================================
@@ -103,48 +74,108 @@ class RedisService(redisUrl: String) {
     // ==================================================
 
     /**
-    * Add event to moderation stream for durable processing
-    * Used for chat moderation, audit logs, suspicious activity
-    */
-    suspend fun addToModerationStream(event: LiveEvent) {
-        println("REDIS: Adding event to moderation stream: ${event::class.simpleName}")
+     * Routes LiveEvent to appropriate stream based on event category
+     * Replaces the old addToStream method
+     */
+    suspend fun addToCategorizedStream(event: LiveEvent) {
+        val safeEvent = event.withDefaults()
+        val eventJson = json.encodeToString(PolymorphicSerializer(LiveEvent::class), safeEvent)
 
+        when (event.getEventCategory()) {
+            EventCategory.CHAT -> addToChatStream(event, eventJson)
+            EventCategory.MODERATION -> addToModerationStream(event, eventJson)
+            EventCategory.ANALYTICS -> addToAnalyticsStream(event, eventJson)
+            EventCategory.BILLING -> addToBillingStream(event, eventJson)
+            EventCategory.SOCIAL -> addToSocialStream(event, eventJson)
+            EventCategory.CONTROL -> addToControlStream(event, eventJson)
+            EventCategory.REAL_TIME_ONLY -> {
+                // These events only go through Pub/Sub, not streams
+                println("DEBUG: Real-time only event ${event::class.simpleName} not persisted to stream")
+            }
+        }
+    }
+
+    /**
+     * Add event to chat stream for durable processing
+     */
+    private suspend fun addToChatStream(event: LiveEvent, eventJson: String) {
         try {
-            val safe = event.withDefaults()
-            val eventJson = json.encodeToString(PolymorphicSerializer(LiveEvent::class), safe)
-            println("REDIS: Event JSON: $eventJson")
-
-            val result = producerCommands.xadd(MODERATION_STREAM, mapOf("event" to eventJson)).awaitFuture()
-            println("REDIS: Successfully added event to stream with ID: $result")
+            producerCommands.xadd(RedisStreams.CHAT_STREAM, mapOf("event" to eventJson)).awaitFuture()
+            println("DEBUG: Added to chat stream: ${event::class.simpleName}")
         } catch (e: Exception) {
-            println("REDIS: Error adding event to moderation stream: ${e.message}")
+            println("ERROR: Failed to add to chat stream: ${e.message}")
             throw e
         }
     }
 
     /**
-    * Add event to analytics stream
-    * Used for engagement metrics, viewer behavior, business intelligence
-    */
-    suspend fun addToAnalyticsStream(event: LiveEvent) {
-        val safe = event.withDefaults()
-        val eventJson = json.encodeToString(PolymorphicSerializer(LiveEvent::class), safe)
-        producerCommands.xadd(ANALYTICS_STREAM, mapOf("event" to eventJson)).awaitFuture()
+     * Add event to moderation stream for audit trail
+     */
+    suspend fun addToModerationStream(event: LiveEvent, eventJson: String) {
+        try {
+            producerCommands.xadd(RedisStreams.MODERATION_STREAM, mapOf("event" to eventJson)).awaitFuture()
+            println("DEBUG: Added to moderation stream: ${event::class.simpleName}")
+        } catch (e: Exception) {
+            println("ERROR: Failed to add to moderation stream: ${e.message}")
+            throw e
+        }
     }
 
     /**
-    * Add gift event to billing stream
-    * Used for financial reconciliation, payout processing, revenue tracking
-    */
-    suspend fun addToBillingStream(event: LiveEvent.Gift) {
-        val eventJson = json.encodeToString(LiveEvent.Gift.serializer(), event)
-        producerCommands.xadd(BILLING_STREAM, mapOf("event" to eventJson)).awaitFuture()
+     * Add event to analytics stream for business intelligence
+     */
+    private suspend fun addToAnalyticsStream(event: LiveEvent, eventJson: String) {
+        try {
+            producerCommands.xadd(RedisStreams.ANALYTICS_STREAM, mapOf("event" to eventJson)).awaitFuture()
+            println("DEBUG: Added to analytics stream: ${event::class.simpleName}")
+        } catch (e: Exception) {
+            println("ERROR: Failed to add to analytics stream: ${e.message}")
+            throw e
+        }
     }
 
     /**
-    * Push a simple social event to SOCIAL_STREAM.
-    * Social events need durability for notification processing
-    */
+     * Add gift event to billing stream for financial reconciliation
+     */
+    private suspend fun addToBillingStream(event: LiveEvent, eventJson: String) {
+        try {
+            producerCommands.xadd(RedisStreams.BILLING_STREAM, mapOf("event" to eventJson)).awaitFuture()
+            println("DEBUG: Added to billing stream: ${event::class.simpleName}")
+        } catch (e: Exception) {
+            println("ERROR: Failed to add to billing stream: ${e.message}")
+            throw e
+        }
+    }
+
+    /**
+     * Add social event to social stream for notification processing
+     */
+    private suspend fun addToSocialStream(event: LiveEvent, eventJson: String) {
+        try {
+            producerCommands.xadd(RedisStreams.SOCIAL_STREAM, mapOf("event" to eventJson)).awaitFuture()
+            println("DEBUG: Added to social stream: ${event::class.simpleName}")
+        } catch (e: Exception) {
+            println("ERROR: Failed to add to social stream: ${e.message}")
+            throw e
+        }
+    }
+
+    /**
+     * Add control event to control stream for system coordination
+     */
+    private suspend fun addToControlStream(event: LiveEvent, eventJson: String) {
+        try {
+            producerCommands.xadd(RedisStreams.CROSS_INSTANCE_CONTROL, mapOf("event" to eventJson)).awaitFuture()
+            println("DEBUG: Added to control stream: ${event::class.simpleName}")
+        } catch (e: Exception) {
+            println("ERROR: Failed to add to control stream: ${e.message}")
+            throw e
+        }
+    }
+
+    /**
+     * Push a social event to SOCIAL_STREAM (for NotificationWorker)
+     */
     suspend fun addSocialEvent(
         type: SocialEventType,
         actorId: Int,
@@ -171,32 +202,52 @@ class RedisService(redisUrl: String) {
         )
         event.actorUsername?.let { map["actorUsername"] = it }
 
-        producerCommands.xadd(SOCIAL_STREAM, map).awaitFuture()
+        producerCommands.xadd(RedisStreams.SOCIAL_STREAM, map).awaitFuture()
+        println("DEBUG: Added social event to stream: $type")
     }
 
     /**
-    * Creates a consumer group for a stream if it doesn't exist.
-    */
+     * Creates consumer groups for all streams if they don't exist
+     */
+    suspend fun initializeStreamConsumerGroups() {
+        val streams = listOf(
+            RedisStreams.CHAT_STREAM,
+            RedisStreams.MODERATION_STREAM,
+            RedisStreams.ANALYTICS_STREAM,
+            RedisStreams.BILLING_STREAM,
+            RedisStreams.SOCIAL_STREAM,
+            RedisStreams.CROSS_INSTANCE_CONTROL
+        )
+
+        streams.forEach { stream ->
+            try {
+                createConsumerGroupIfNotExists(stream, "${stream}_group")
+                println("DEBUG: Initialized consumer group for stream: $stream")
+            } catch (e: Exception) {
+                println("WARN: Failed to initialize consumer group for $stream: ${e.message}")
+            }
+        }
+    }
+
+    /**
+     * Creates a consumer group for a stream if it doesn't exist.
+     */
     suspend fun createConsumerGroupIfNotExists(streamKey: String, group: String) {
-        println("REDISSERVICE: inside createConsumerGroupIfNotExists")
         try {
-            println("REDISSERVICE: inside createConsumerGroupIfNotExists try")
             consumerCommands.xgroupCreate(
                 XReadArgs.StreamOffset.from(streamKey, "0-0"),
                 group,
                 XGroupCreateArgs.Builder.mkstream(true)
             ).awaitFuture()
         } catch (e: RedisCommandExecutionException) {
-            println("REDISSERVICE: inside createConsumerGroupIfNotExists catch")
             if (!e.message.orEmpty().contains("BUSYGROUP")) throw e
         }
     }
 
     /**
-    * Updated to trigger both Pub/Sub and Stream events
-    * Real-time: Immediate notification to followers
-    * Durable: Persistent event for offline followers
-    */
+     * Trigger live notifications when a user goes live
+     * This adds a social event to the SOCIAL_STREAM for the NotificationWorker to process
+     */
     suspend fun triggerLiveNotification(userId: Int, username: String, streamId: String? = null) {
         val event = SocialEvent(
             type = SocialEventType.LIVE_STARTED,
@@ -211,6 +262,7 @@ class RedisService(redisUrl: String) {
         )
 
         val payload = json.encodeToString(SocialEvent.serializer(), event)
+
         val map = mutableMapOf<String, String>(
             "event" to payload,
             "type" to event.type.name,
@@ -220,13 +272,26 @@ class RedisService(redisUrl: String) {
         )
         event.actorUsername?.let { map["actorUsername"] = it }
 
-        // Durable: Add to stream for notification processing
-        producerCommands.xadd(SOCIAL_STREAM, map).awaitFuture()
-
-        // Real-time: Could also publish via Pub/Sub for instant delivery to online users
-        // producerCommands.publish("user_live_notifications", payload).awaitFuture()
-
+        producerCommands.xadd(RedisStreams.SOCIAL_STREAM, map).awaitFuture()
         println("DEBUG: Triggered live notification for user $userId ($username)")
+    }
+
+    // ==================================================
+    // PUB/SUB OPERATIONS (REAL-TIME, EPHEMERAL)
+    // ==================================================
+
+    /**
+     * Publish real-time event to a room channel
+     */
+    suspend fun publishToRoom(roomId: String, eventJson: String) {
+        producerCommands.publish("${RedisStreams.ROOM_EVENTS_PREFIX}$roomId", eventJson).awaitFuture()
+    }
+
+    /**
+     * Publish user notification
+     */
+    suspend fun publishToUser(userId: String, eventJson: String) {
+        producerCommands.publish(RedisStreams.USER_NOTIFICATIONS_CHANNEL, eventJson).awaitFuture()
     }
 
     // ==================================================
@@ -234,12 +299,11 @@ class RedisService(redisUrl: String) {
     // ==================================================
 
     /**
-    * Adds chat messages to room history with size limit.
-    * Only used for chat replay, not real-time delivery
-    */
+     * Adds chat messages to room history with size limit
+     */
     suspend fun addToHistory(roomId: String, event: LiveEvent) {
         if (event is LiveEvent.ChatMessage || event is LiveEvent.SystemMessage) {
-            val key = "room:$roomId:history"
+            val key = "${RedisStreams.ROOM_HISTORY_PREFIX}$roomId"
             val safe = event.withDefaults()
             val jsonStr = json.encodeToString(PolymorphicSerializer(LiveEvent::class), safe)
 
@@ -249,10 +313,10 @@ class RedisService(redisUrl: String) {
     }
 
     /**
-    * Retrieves chat history for a room.
-    */
+     * Retrieves chat history for a room
+     */
     suspend fun getRoomHistory(roomId: String): List<LiveEvent> {
-        val key = "room:$roomId:history"
+        val key = "${RedisStreams.ROOM_HISTORY_PREFIX}$roomId"
         val jsonList = producerCommands.lrange(key, 0, -1).awaitFuture()
         return jsonList.reversed().mapNotNull { jsonStr ->
             try {
@@ -264,10 +328,10 @@ class RedisService(redisUrl: String) {
     }
 
     /**
-    * Deletes room history (cleanup when room ends).
-    */
+     * Deletes room history (cleanup when room ends)
+     */
     suspend fun deleteHistory(roomId: String) {
-        producerCommands.del("room:$roomId:history").awaitFuture()
+        producerCommands.del("${RedisStreams.ROOM_HISTORY_PREFIX}$roomId").awaitFuture()
     }
 
     // ==================================================
@@ -275,86 +339,105 @@ class RedisService(redisUrl: String) {
     // ==================================================
 
     /**
-    * Increments a counter value in Redis.
-    */
-    suspend fun incrementCounter(key: String, value: Long): Long =
-        producerCommands.incrby(key, value).awaitFuture()
+     * Increments a counter value in Redis with TTL
+     */
+    suspend fun incrementCounter(key: String, value: Long): Long {
+        val result = producerCommands.incrby(key, value).awaitFuture()
+        // Set TTL if this is a new key
+        producerCommands.expire(key, COUNTER_TTL_HOURS * 3600).awaitFuture()
+        return result
+    }
 
     /**
-    * Increments user-specific like count for a room.
-    */
+     * Increments user-specific like count for a room
+     */
     suspend fun incrementUserLikeCount(roomId: String, userId: String, count: Long): Long {
-        val key = "room:$roomId:user_likes:$userId"
+        val key = "${RedisStreams.ROOM_COUNTERS_PREFIX}$roomId:user_likes:$userId"
         return incrementCounter(key, count)
     }
 
     /**
-    * Gets counter value from Redis.
-    */
+     * Gets counter value from Redis
+     */
     suspend fun getCounter(key: String): Long? =
         producerCommands.get(key).awaitFuture()?.toLongOrNull()
 
     /**
-    * Cleans up all Redis data for a room when it ends.
-    */
+     * Cleans up all Redis data for a room when it ends
+     */
     suspend fun deleteCounters(roomId: String) {
-        producerCommands.del("room:$roomId:likes").awaitFuture()
-        val userKeys = producerCommands.keys("room:$roomId:user_likes:*").awaitFuture()
-        if (userKeys.isNotEmpty()) {
-            producerCommands.del(*userKeys.toTypedArray()).awaitFuture()
+        val keysToDelete = mutableListOf<String>()
+
+        // Basic counters
+        keysToDelete.add("${RedisStreams.ROOM_COUNTERS_PREFIX}$roomId:likes")
+
+        // User like counters
+        val userKeys = producerCommands.keys("${RedisStreams.ROOM_COUNTERS_PREFIX}$roomId:user_likes:*").awaitFuture()
+        keysToDelete.addAll(userKeys)
+
+        // Gift counters
+        val giftKeys = producerCommands.keys("${RedisStreams.ROOM_COUNTERS_PREFIX}$roomId:gifts:*").awaitFuture()
+        keysToDelete.addAll(giftKeys)
+
+        if (keysToDelete.isNotEmpty()) {
+            producerCommands.del(*keysToDelete.toTypedArray()).awaitFuture()
         }
+
         deleteHistory(roomId)
     }
 
     // ==================================================
-    // ROOM USER OPERATIONS
+    // SESSION MANAGEMENT OPERATIONS
     // ==================================================
 
     /**
-    * Gets room user count efficiently
-    */
+     * Room user operations with TTL
+     */
     suspend fun getRoomUserCount(roomId: String): Long =
         producerCommands.scard("room:$roomId:users").awaitFuture()
 
-    /**
-    * Checks if user is in room
-    */
     suspend fun isUserInRoom(roomId: String, userId: String): Boolean =
         producerCommands.sismember("room:$roomId:users", userId).awaitFuture()
 
-    /**
-    * Gets all users in room
-    */
     suspend fun getRoomUsers(roomId: String): Set<String> =
         producerCommands.smembers("room:$roomId:users").awaitFuture() ?: emptySet()
+
+    suspend fun addUserToRoom(roomId: String, userId: String) {
+        producerCommands.sadd("room:$roomId:users", userId).awaitFuture()
+        producerCommands.expire("room:$roomId:users", SESSION_TTL_HOURS * 3600).awaitFuture()
+    }
+
+    suspend fun removeUserFromRoom(roomId: String, userId: String) {
+        producerCommands.srem("room:$roomId:users", userId).awaitFuture()
+    }
 
     // ==================================================
     // HASH OPERATIONS
     // ==================================================
 
     /**
-    * Sets hash field
-    */
+     * Sets hash field
+     */
     suspend fun hset(key: String, field: String, value: String) {
         producerCommands.hset(key, field, value).awaitFuture()
     }
 
     /**
-    * Gets hash field
-    */
+     * Gets hash field
+     */
     suspend fun hget(key: String, field: String): String? =
         producerCommands.hget(key, field).awaitFuture()
 
     /**
-    * Gets all hash fields
-    */
+     * Gets all hash fields
+     */
     suspend fun hgetall(key: String): Map<String, String> =
         producerCommands.hgetall(key).awaitFuture()
 
     /**
-    * Convenience helper to HSET multiple fields (map). Uses individual hset calls
-    * to keep compatibility with Lettuce async API so we can await each write.
-    */
+     * Convenience helper to HSET multiple fields (map). Uses individual hset calls
+     * to keep compatibility with Lettuce async API so we can await each write.
+     */
     suspend fun hsetAll(key: String, map: Map<String, String>) {
         if (map.isEmpty()) return
         // iterate and await each field set (could be optimized as a single HMSET if available)
@@ -368,26 +451,26 @@ class RedisService(redisUrl: String) {
     // ==================================================
 
     /**
-    * Adds to set
-    */
+     * Adds to set
+     */
     suspend fun sadd(key: String, vararg members: String): Long =
         producerCommands.sadd(key, *members).awaitFuture()
 
     /**
-    * Removes from set
-    */
+     * Removes from set
+     */
     suspend fun srem(key: String, vararg members: String): Long =
         producerCommands.srem(key, *members).awaitFuture()
 
     /**
-    * Generic SMEMBERS wrapper that awaits the RedisFuture and returns a Set<String>.
-    */
+     * Generic SMEMBERS wrapper that awaits the RedisFuture and returns a Set<String>.
+     */
     suspend fun smembers(key: String): Set<String> =
         producerCommands.smembers(key).awaitFuture() ?: emptySet()
 
     /**
-    * General SISMEMBER wrapper
-    */
+     * General SISMEMBER wrapper
+     */
     suspend fun sismember(key: String, member: String): Boolean =
         producerCommands.sismember(key, member).awaitFuture()
 
@@ -402,39 +485,39 @@ class RedisService(redisUrl: String) {
     }
 
     /**
-    * Sets key with expiry
-    */
+     * Sets key with expiry
+     */
     suspend fun setex(key: String, seconds: Long, value: String) {
         producerCommands.setex(key, seconds, value).awaitFuture()
     }
 
     /**
-    * Sets key if not exists
-    */
+     * Sets key if not exists
+     */
     suspend fun setnx(key: String, value: String): Boolean =
         producerCommands.setnx(key, value).awaitFuture()
 
     /**
-    * Deletes keys
-    */
+     * Deletes keys
+     */
     suspend fun del(vararg keys: String): Long =
         producerCommands.del(*keys).awaitFuture()
 
     /**
-    * Gets keys by pattern
-    */
+     * Gets keys by pattern
+     */
     suspend fun keys(pattern: String): List<String> =
         producerCommands.keys(pattern).awaitFuture()
 
     /**
-    * Sets expiry
-    */
+     * Sets expiry
+     */
     suspend fun expire(key: String, seconds: Long): Boolean =
         producerCommands.expire(key, seconds).awaitFuture()
 
     /**
-    * Get a string value for a key.
-    */
+     * Get a string value for a key.
+     */
     suspend fun get(key: String): String? =
         producerCommands.get(key).awaitFuture()
 
@@ -443,14 +526,14 @@ class RedisService(redisUrl: String) {
     // ==================================================
 
     /**
-    * Gets stream metadata from Redis hash.
-    */
+     * Gets stream metadata from Redis hash.
+     */
     suspend fun getStreamMetadata(roomId: String): Map<String, String> =
         producerCommands.hgetall("stream:$roomId").awaitFuture()
 
     /**
-    * Gets stream moderation state.
-    */
+     * Gets stream moderation state.
+     */
     suspend fun getStreamModerationState(streamId: String): String? {
         return try {
             val metadata = getStreamMetadata(streamId)
@@ -465,8 +548,8 @@ class RedisService(redisUrl: String) {
     // ==================================================
 
     /**
-    * Ping Redis to check connectivity
-    */
+     * Ping Redis to check connectivity
+     */
     suspend fun ping(): Boolean {
         return try {
             val result = producerCommands.ping().awaitFuture()
@@ -477,14 +560,11 @@ class RedisService(redisUrl: String) {
     }
 
     /**
-    * Exists wrapper: returns number of keys existing (0 or 1 typically)
-    */
+     * Exists wrapper: returns number of keys existing (0 or 1 typically)
+     */
     suspend fun exists(key: String): Long =
         producerCommands.exists(key).awaitFuture()
 
-    /**
-    * Closes Redis connections.
-    */
     fun close() {
         try { serviceScope.cancel() } catch (_: Throwable) {}
         try { producerConnection.close() } catch (_: Throwable) {}

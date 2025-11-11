@@ -96,7 +96,7 @@ fun Application.configureSockets(
         when (event) {
             is LiveEvent.KickUser -> {
                 // persist kick permission (kicked set) and log inside manager
-                distributedPermissionManager.kickUser(event.roomId, event.targetUserId) // ADDED/ENSURED
+                distributedPermissionManager.kickUser(event.roomId, event.targetUserId)
 
                 val sessionInfo = distributedSessionManager.getSessionInfo(event.targetUserId, event.roomId)
                 val username = sessionInfo?.get("username") ?: "User"
@@ -117,82 +117,66 @@ fun Application.configureSockets(
                 }
 
                 // Broadcast typed KickUser event so client updates state
+                // This automatically routes to MODERATION_STREAM via broadcastToRoom
                 try {
-                    crossInstanceBroadcaster.broadcastToRoom(event.roomId, event) // ADDED
+                    crossInstanceBroadcaster.broadcastToRoom(event.roomId, event)
                 } catch (e: Exception) {
-                    println("WARN: failed to broadcast KickUser event: ${e.message}") // ADDED
+                    println("WARN: failed to broadcast KickUser event: ${e.message}")
                 }
 
-                // Broadcast system message
+                // Broadcast system message - automatically routes to CHAT_STREAM via broadcastToRoom
                 val systemMessage = LiveEvent.SystemMessage(
                     roomId = event.roomId,
                     text = "$username was kicked from the stream",
                     timestamp = System.currentTimeMillis()
                 )
                 crossInstanceBroadcaster.broadcastToRoom(event.roomId, systemMessage)
-
-                // Persist to moderation stream
-                try {
-                    redisService.addToModerationStream(event) // ADDED
-                } catch (e: Exception) {
-                    println("WARN: Failed to persist KickUser to moderation stream: ${e.message}") // ADDED
-                }
             }
 
             is LiveEvent.MuteUser -> {
                 distributedPermissionManager.muteUser(event.roomId, event.targetUserId)
 
                 // Broadcast typed MuteUser event so clients update state
+                // This automatically routes to MODERATION_STREAM via broadcastToRoom
                 try {
-                    crossInstanceBroadcaster.broadcastToRoom(event.roomId, event) // ADDED
+                    crossInstanceBroadcaster.broadcastToRoom(event.roomId, event)
                 } catch (e: Exception) {
-                    println("WARN: failed to broadcast MuteUser event: ${e.message}") // ADDED
+                    println("WARN: failed to broadcast MuteUser event: ${e.message}")
                 }
 
                 val sessionInfo = distributedSessionManager.getSessionInfo(event.targetUserId, event.roomId)
                 val username = sessionInfo?.get("username") ?: "User"
 
+                // Broadcast system message - automatically routes to CHAT_STREAM via broadcastToRoom
                 val systemMessage = LiveEvent.SystemMessage(
                     roomId = event.roomId,
                     text = "$username was muted",
                     timestamp = System.currentTimeMillis()
                 )
                 crossInstanceBroadcaster.broadcastToRoom(event.roomId, systemMessage)
-
-                // Persist to moderation stream
-                try {
-                    redisService.addToModerationStream(event) // ADDED
-                } catch (e: Exception) {
-                    println("WARN: Failed to persist MuteUser to moderation stream: ${e.message}") // ADDED
-                }
             }
 
             is LiveEvent.UnmuteUser -> {
                 distributedPermissionManager.unmuteUser(event.roomId, event.targetUserId)
 
                 // Broadcast typed UnmuteUser event so clients update state
+                // This automatically routes to MODERATION_STREAM via broadcastToRoom
                 try {
-                    crossInstanceBroadcaster.broadcastToRoom(event.roomId, event) // ADDED
+                    crossInstanceBroadcaster.broadcastToRoom(event.roomId, event)
                 } catch (e: Exception) {
-                    println("WARN: failed to broadcast UnmuteUser event: ${e.message}") // ADDED
+                    println("WARN: failed to broadcast UnmuteUser event: ${e.message}")
                 }
 
                 val sessionInfo = distributedSessionManager.getSessionInfo(event.targetUserId, event.roomId)
                 val username = sessionInfo?.get("username") ?: "User"
 
+                // Broadcast system message - automatically routes to CHAT_STREAM via broadcastToRoom
                 val systemMessage = LiveEvent.SystemMessage(
                     roomId = event.roomId,
                     text = "$username was unmuted",
                     timestamp = System.currentTimeMillis()
                 )
                 crossInstanceBroadcaster.broadcastToRoom(event.roomId, systemMessage)
-
-                // Persist to moderation stream
-                try {
-                    redisService.addToModerationStream(event) // ADDED
-                } catch (e: Exception) {
-                    println("WARN: Failed to persist UnmuteUser to moderation stream: ${e.message}") // ADDED
-                }
             }
 
             is LiveEvent.GrantModerator -> {
@@ -203,6 +187,7 @@ fun Application.configureSockets(
                 val nowModerator = distributedPermissionManager.isModerator(event.roomId, event.targetUserId)
 
                 // Broadcast typed event (so clients update their UI)
+                // This automatically routes to MODERATION_STREAM via broadcastToRoom
                 try {
                     crossInstanceBroadcaster.broadcastToRoom(event.roomId, event)
                 } catch (e: Exception) {
@@ -218,41 +203,29 @@ fun Application.configureSockets(
                     timestamp = System.currentTimeMillis()
                 )
                 crossInstanceBroadcaster.broadcastToRoom(event.roomId, systemMessage)
-
-                // Persist action to moderation stream for audit
-                try {
-                    redisService.addToModerationStream(event) // ADDED
-                } catch (e: Exception) {
-                    println("WARN: Failed to persist GrantModerator to moderation stream: ${e.message}") // ADDED
-                }
             }
 
             is LiveEvent.RevokeModerator -> {
                 distributedPermissionManager.revokeModerator(event.roomId, event.targetUserId)
 
                 // Broadcast typed RevokeModerator event
+                // This automatically routes to MODERATION_STREAM via broadcastToRoom
                 try {
-                    crossInstanceBroadcaster.broadcastToRoom(event.roomId, event) // ADDED
+                    crossInstanceBroadcaster.broadcastToRoom(event.roomId, event)
                 } catch (e: Exception) {
-                    println("WARN: failed to broadcast RevokeModerator event: ${e.message}") // ADDED
+                    println("WARN: failed to broadcast RevokeModerator event: ${e.message}")
                 }
 
                 val sessionInfo = distributedSessionManager.getSessionInfo(event.targetUserId, event.roomId)
                 val username = sessionInfo?.get("username") ?: "User"
 
+                // Broadcast system message - automatically routes to CHAT_STREAM via broadcastToRoom
                 val systemMessage = LiveEvent.SystemMessage(
                     roomId = event.roomId,
                     text = "$username was removed as moderator",
                     timestamp = System.currentTimeMillis()
                 )
                 crossInstanceBroadcaster.broadcastToRoom(event.roomId, systemMessage)
-
-                // Persist action to moderation stream for audit
-                try {
-                    redisService.addToModerationStream(event) // ADDED
-                } catch (e: Exception) {
-                    println("WARN: Failed to persist RevokeModerator to moderation stream: ${e.message}") // ADDED
-                }
             }
 
             else -> {
@@ -356,11 +329,11 @@ fun Application.configureSockets(
     }
 
     /**
-    * Main handler for live room events. Processes different types of events
-    * with clear separation between real-time (Pub/Sub) and durable (Streams) processing.
-    *
-    * Updated to use Pub/Sub for real-time delivery and Streams for durable workflows
-    */
+     * Main handler for live room events. Processes different types of events
+     * with automatic stream categorization and routing.
+     *
+     * Events are automatically routed to appropriate streams via crossInstanceBroadcaster.broadcastToRoom()
+     */
     suspend fun handleLiveRoomEvent(
         event: LiveEvent,
         userId: String,
@@ -374,7 +347,7 @@ fun Application.configureSockets(
         }
 
         when (event) {
-            // REAL-TIME EVENTS (Pub/Sub only)
+            // REAL-TIME EVENTS (Pub/Sub only + Analytics)
             is LiveEvent.Like -> {
                 redisManager.incrementCounter("room:$roomId:likes", event.count.toLong())
                 val userTotal = redisManager.incrementUserLikeCount(roomId, userId, event.count.toLong())
@@ -396,11 +369,8 @@ fun Application.configureSockets(
                     crossInstanceBroadcaster.broadcastToRoom(roomId, systemEvent)
                 }
 
+                // Automatically routes to ANALYTICS_STREAM via broadcastToRoom
                 crossInstanceBroadcaster.broadcastToRoom(roomId, event)
-
-                if (event.count > 10 || userTotal % 100 == 0L) {
-                    redisManager.addToAnalyticsStream(event)
-                }
             }
 
             is LiveEvent.JoinRoom -> {
@@ -410,6 +380,7 @@ fun Application.configureSockets(
                     timestamp = System.currentTimeMillis()
                 )
 
+                // Automatically routes to ANALYTICS_STREAM and CHAT_STREAM via broadcastToRoom
                 crossInstanceBroadcaster.broadcastToRoom(roomId, event)
                 crossInstanceBroadcaster.broadcastToRoom(roomId, systemMessage)
                 updateStreamStats(roomId, redisManager)
@@ -422,43 +393,46 @@ fun Application.configureSockets(
                     timestamp = System.currentTimeMillis()
                 )
 
+                // Automatically routes to ANALYTICS_STREAM and CHAT_STREAM via broadcastToRoom
                 crossInstanceBroadcaster.broadcastToRoom(roomId, event)
                 crossInstanceBroadcaster.broadcastToRoom(roomId, systemMessage)
                 updateStreamStats(roomId, redisManager)
             }
 
-            // HYBRID EVENTS (Real-time + Durable)
+            // HYBRID EVENTS (Real-time + Multiple Durable Streams)
             is LiveEvent.ChatMessage -> {
-                redisManager.addToModerationStream(event)
-                redisManager.addToAnalyticsStream(event)
-
-                if (!distributedPermissionManager.isMuted(roomId, userId)) {
-                    crossInstanceBroadcaster.broadcastToRoom(roomId, event)
-                }
-
+                // Add to room history for chat replay
                 redisManager.addToHistory(roomId, event)
+
+                // Check if user is muted before broadcasting
+                if (!distributedPermissionManager.isMuted(roomId, userId)) {
+                    // Automatically routes to CHAT_STREAM and MODERATION_STREAM via broadcastToRoom
+                    crossInstanceBroadcaster.broadcastToRoom(roomId, event)
+                } else {
+                    // User is muted - only persist to moderation stream for audit
+                    try {
+                        redisManager.addToCategorizedStream(event)
+                    } catch (e: Exception) {
+                        println("ERROR: Failed to add muted chat to stream: ${e.message}")
+                    }
+                }
             }
 
             is LiveEvent.Gift -> {
+                // Automatically routes to BILLING_STREAM and ANALYTICS_STREAM via broadcastToRoom
                 crossInstanceBroadcaster.broadcastToRoom(roomId, event)
-                redisManager.addToBillingStream(event)
-                redisManager.addToAnalyticsStream(event)
                 redisManager.incrementCounter("room:$roomId:gifts:${event.giftId}", event.quantity.toLong())
             }
 
-            // MODERATION EVENTS (Real-time via Pub/Sub + Durable via Streams)
+            // MODERATION EVENTS (Real-time + Moderation Stream)
             is LiveEvent.KickUser -> {
                 if (distributedPermissionManager.isStreamOwner(roomId, userId) ||
                     distributedPermissionManager.isModerator(roomId, userId)) {
                     // Execute immediately and broadcast via Pub/Sub
                     executeModerationAction(event)
 
-                    // Also persist to stream for audit (CHANGED: ensure durable storage)
-                    try {
-                        redisManager.addToModerationStream(event) // ADDED
-                    } catch (e: Exception) {
-                        println("WARN: Failed to persist KickUser to moderation stream: ${e.message}") // ADDED
-                    }
+                    // Automatically routes to MODERATION_STREAM via broadcastToRoom
+                    crossInstanceBroadcaster.broadcastToRoom(roomId, event)
 
                     // Send acknowledgment to moderator
                     session?.let {
@@ -477,12 +451,8 @@ fun Application.configureSockets(
 
                     executeModerationAction(event)
 
-                    // Persist to moderation stream for audit
-                    try {
-                        redisManager.addToModerationStream(event) // ADDED
-                    } catch (e: Exception) {
-                        println("WARN: Failed to persist MuteUser to moderation stream: ${e.message}") // ADDED
-                    }
+                    // Automatically routes to MODERATION_STREAM via broadcastToRoom
+                    crossInstanceBroadcaster.broadcastToRoom(roomId, event)
 
                     session?.let {
                         sendModerationAck(it, roomId, "mute", event.targetUserId, true)
@@ -500,12 +470,8 @@ fun Application.configureSockets(
 
                     executeModerationAction(event)
 
-                    // Persist to moderation stream for audit
-                    try {
-                        redisManager.addToModerationStream(event) // ADDED
-                    } catch (e: Exception) {
-                        println("WARN: Failed to persist UnmuteUser to moderation stream: ${e.message}") // ADDED
-                    }
+                    // Automatically routes to MODERATION_STREAM via broadcastToRoom
+                    crossInstanceBroadcaster.broadcastToRoom(roomId, event)
 
                     session?.let {
                         sendModerationAck(it, roomId, "unmute", event.targetUserId, true)
@@ -525,12 +491,8 @@ fun Application.configureSockets(
                     try {
                         executeModerationAction(event)
 
-                        // Also persist to stream for audit
-                        try {
-                            redisManager.addToModerationStream(event) // ADDED
-                        } catch (e: Exception) {
-                            println("WARN: Failed to persist GrantModerator to moderation stream: ${e.message}") // ADDED
-                        }
+                        // Automatically routes to MODERATION_STREAM via broadcastToRoom
+                        crossInstanceBroadcaster.broadcastToRoom(roomId, event)
 
                         session?.let {
                             sendModerationAck(it, roomId, "grant_moderator", event.targetUserId, true)
@@ -550,12 +512,8 @@ fun Application.configureSockets(
                 if (distributedPermissionManager.isStreamOwner(roomId, userId)) {
                     executeModerationAction(event)
 
-                    // Persist to moderation stream for audit
-                    try {
-                        redisManager.addToModerationStream(event) // ADDED
-                    } catch (e: Exception) {
-                        println("WARN: Failed to persist RevokeModerator to moderation stream: ${e.message}") // ADDED
-                    }
+                    // Automatically routes to MODERATION_STREAM via broadcastToRoom
+                    crossInstanceBroadcaster.broadcastToRoom(roomId, event)
 
                     session?.let {
                         sendModerationAck(it, roomId, "revoke_moderator", event.targetUserId, true)
@@ -567,21 +525,35 @@ fun Application.configureSockets(
                 }
             }
 
-            // SYSTEM EVENTS (Mostly Real-time)
+            // SYSTEM EVENTS (Mostly Real-time + Selective Moderation)
             is LiveEvent.SystemMessage -> {
+                // Add to room history for chat replay
+                redisManager.addToHistory(roomId, event)
+
+                // Automatically routes to CHAT_STREAM via broadcastToRoom
                 crossInstanceBroadcaster.broadcastToRoom(roomId, event)
+
+                // Special handling for moderation-related system messages
                 if (event.text.contains("violation", ignoreCase = true) ||
-                    event.text.contains("terminated", ignoreCase = true)) {
-                    redisManager.addToModerationStream(event)
+                    event.text.contains("terminated", ignoreCase = true) ||
+                    event.text.contains("kicked", ignoreCase = true) ||
+                    event.text.contains("muted", ignoreCase = true)) {
+                    // Also ensure it goes to moderation stream for audit
+                    try {
+                        redisManager.addToCategorizedStream(event)
+                    } catch (e: Exception) {
+                        println("WARN: Failed to add system message to moderation stream: ${e.message}")
+                    }
                 }
             }
 
-            // COMPUTED STATE (Real-time only)
+            // COMPUTED STATE (Real-time only - no persistence needed)
             is LiveEvent.StreamStats, is LiveEvent.PublisherInfoEvent -> {
+                // These are real-time only - automatically handled as REAL_TIME_ONLY category
                 crossInstanceBroadcaster.broadcastToRoom(roomId, event)
             }
 
-            // MODERATION WARNINGS (Real-time + Durable)
+            // MODERATION WARNINGS (Real-time + Moderation Stream)
             is LiveEvent.ModerationWarningEvent -> {
                 val streamOwnerId = distributedPermissionManager.getStreamOwner(roomId)
                 val sessions = LiveRoomSessionRegistry.getRoomSessions(roomId)
@@ -612,10 +584,12 @@ fun Application.configureSockets(
                     }
                 }
 
-                redisManager.addToModerationStream(event)
+                // Automatically routes to MODERATION_STREAM via broadcastToRoom
+                crossInstanceBroadcaster.broadcastToRoom(roomId, event)
             }
 
             is LiveEvent.StreamTerminatedEvent -> {
+                // Automatically routes to MODERATION_STREAM via broadcastToRoom
                 crossInstanceBroadcaster.broadcastToRoom(roomId, event)
 
                 val streamOwnerId = distributedPermissionManager.getStreamOwner(roomId)
@@ -659,10 +633,10 @@ fun Application.configureSockets(
 
                 distributedPermissionManager.removeRoom(roomId)
                 redisManager.deleteCounters(roomId)
-                redisManager.addToModerationStream(event)
             }
 
             is LiveEvent.ModerationClearEvent -> {
+                // Automatically routes to MODERATION_STREAM via broadcastToRoom
                 crossInstanceBroadcaster.broadcastToRoom(roomId, event)
 
                 val sessions = LiveRoomSessionRegistry.getRoomSessions(roomId)
@@ -674,11 +648,12 @@ fun Application.configureSockets(
                         // ignore send failure
                     }
                 }
-
-                redisManager.addToModerationStream(event)
             }
 
             is LiveEvent.StreamEndedEvent -> {
+                // Automatically routes to CONTROL_STREAM via broadcastToRoom
+                crossInstanceBroadcaster.broadcastToRoom(roomId, event)
+
                 LiveRoomSessionRegistry.getSession(roomId, userId)?.let { session ->
                     try {
                         val closeReason = CloseReason(CloseReason.Codes.GOING_AWAY, "Stream ended")
