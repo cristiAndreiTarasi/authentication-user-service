@@ -20,6 +20,7 @@ import example.com.services.ServiceManager
 import example.com.services.gridfs.GridFSService
 import example.com.services.hashing.HashingService
 import example.com.services.redis.RedisService
+import example.com.services.redis.ShardedRedisService
 import example.com.services.token.ITokenService
 import io.ktor.client.HttpClient
 import io.ktor.server.application.Application
@@ -40,7 +41,7 @@ fun Application.configureRouting(
     httpClient: HttpClient,
     authTokenService: ITokenService,
     publishTokenService: ITokenService,
-    redisService: RedisService,
+    shardedRedisService: ShardedRedisService,
     moderationPublishSecret: String,
     notificationSchema: NotificationSchema,
     serviceManager: ServiceManager
@@ -54,14 +55,14 @@ fun Application.configureRouting(
 
             userRoutes(
                 userSchema, notificationSchema, authTokenService,
-                dataSource, gridFSService, redisService
+                dataSource, gridFSService, shardedRedisService
             )
 
             streamRoutes(
                 streamSchema, gridFSService,
                 publishTokenService, userSchema,
                 serviceManager.distributedPermissionManager,
-                redisService
+                shardedRedisService
             )
 
             eventRoutes(
@@ -74,11 +75,11 @@ fun Application.configureRouting(
 
             srsHttpHookRoutes(
                 userSchema, publishTokenService, streamSchema,
-                httpClient, redisService, moderationPublishSecret
+                httpClient, shardedRedisService, moderationPublishSecret
             )
 
             moderationRoutes(
-                redisService,
+                shardedRedisService,
                 streamSchema,
                 moderationPublishSecret,
                 serviceManager.distributedPermissionManager

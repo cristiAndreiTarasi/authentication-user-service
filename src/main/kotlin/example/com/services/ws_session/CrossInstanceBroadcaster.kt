@@ -9,6 +9,7 @@ import example.com.services.notifications.NotificationSessionRegistry
 import example.com.services.redis.EventCategory
 import example.com.services.redis.RedisService
 import example.com.services.redis.RedisStreams
+import example.com.services.redis.ShardedRedisService
 import example.com.services.redis.getEventCategory
 import io.ktor.websocket.Frame
 import io.lettuce.core.Consumer
@@ -47,15 +48,15 @@ data class CrossInstanceMessage(
 * Handles cross-instance event broadcasting using Redis Streams
 * Ensures events reach all users across all instances
 */
-// CrossInstanceBroadcaster.kt
 class CrossInstanceBroadcaster(
-    private val redisService: RedisService,
+    private val shardedRedisService: ShardedRedisService,  // Changed to ShardedRedisService
     private val instanceId: String
 ) {
     private val json: Json = AppJson
 
-    // Using Pub/Sub channels for real-time events
-    private val pubSubConnection: StatefulRedisPubSubConnection<String, String> = redisService.redisClient.connectPubSub()
+    // Using Pub/Sub channels for real-time events - uses sessionsRedis for Pub/Sub
+    private val pubSubConnection: StatefulRedisPubSubConnection<String, String> =
+        shardedRedisService.sessionsRedis.redisClient.connectPubSub()  // Access sessionsRedis directly for Pub/Sub
 
     // Scope used for listener & background tasks
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -78,14 +79,15 @@ class CrossInstanceBroadcaster(
 
     /**
      * Pub/Sub listener for real-time event broadcasting
+     * Uses sessions Redis for Pub/Sub to ensure all instances receive messages
      */
     private suspend fun startPubSubListener() {
         val pubSubAdapter = pubSubConnection.sync()
 
         try {
-            // Subscribe to pattern for all room events
+            // Subscribe to pattern for all room events - uses sessionsRedis
             pubSubAdapter.psubscribe("${RedisStreams.ROOM_EVENTS_PREFIX}*")
-            // Subscribe to user notifications channel
+            // Subscribe to user notifications channel - uses sessionsRedis
             pubSubAdapter.subscribe(RedisStreams.USER_NOTIFICATIONS_CHANNEL)
 
             pubSubConnection.addListener(object : RedisPubSubListener<String, String> {
@@ -183,6 +185,7 @@ class CrossInstanceBroadcaster(
 
     /**
      * Unified method for broadcasting events with proper stream categorization
+     * Uses ShardedRedisService for both Pub/Sub and durable stream routing
      */
     suspend fun broadcastToRoom(roomId: String, event: LiveEvent) {
         val safeEvent = event.withDefaults()
@@ -191,7 +194,7 @@ class CrossInstanceBroadcaster(
         // Always broadcast to local users first (lowest latency)
         broadcastToLocalRoom(roomId, eventJson)
 
-        // Use Pub/Sub for cross-instance real-time delivery
+        // Use Pub/Sub for cross-instance real-time delivery - uses sessionsRedis via ShardedRedisService
         val crossInstanceMessage = CrossInstanceMessage(
             type = "live_event",
             roomId = roomId,
@@ -203,12 +206,13 @@ class CrossInstanceBroadcaster(
         val messageJson = json.encodeToString(CrossInstanceMessage.serializer(), crossInstanceMessage)
 
         try {
-            redisService.publishToRoom(roomId, messageJson)
+            // Uses sessionsRedis for Pub/Sub via ShardedRedisService
+            shardedRedisService.publishToRoom(roomId, messageJson)
         } catch (e: Exception) {
             println("ERROR: Failed to publish room event: ${e.message}")
         }
 
-        // Route to appropriate durable stream based on event category
+        // Route to appropriate durable stream based on event category - uses ShardedRedisService routing
         when (event.getEventCategory()) {
             EventCategory.CHAT,
             EventCategory.MODERATION,
@@ -217,7 +221,8 @@ class CrossInstanceBroadcaster(
             EventCategory.SOCIAL,
             EventCategory.CONTROL -> {
                 try {
-                    redisService.addToCategorizedStream(event)
+                    // Uses ShardedRedisService to route to appropriate Redis shard
+                    shardedRedisService.addToCategorizedStream(event)
                 } catch (e: Exception) {
                     println("ERROR: Failed to add event to categorized stream: ${e.message}")
                 }
@@ -231,6 +236,7 @@ class CrossInstanceBroadcaster(
 
     /**
      * Send notification to user with proper routing
+     * Uses ShardedRedisService for Pub/Sub delivery
      */
     suspend fun sendToUser(userId: Int, event: NotificationEvent) {
         val safeEvent = event.withDefaults()
@@ -240,7 +246,7 @@ class CrossInstanceBroadcaster(
         val localDelivered = NotificationSessionRegistry.sendToUser(userId, eventJson)
 
         if (!localDelivered) {
-            // Use Pub/Sub for cross-instance user notifications
+            // Use Pub/Sub for cross-instance user notifications - uses sessionsRedis via ShardedRedisService
             val crossInstanceMessage = CrossInstanceMessage(
                 type = "notification_event",
                 targetUserId = userId.toString(),
@@ -251,7 +257,8 @@ class CrossInstanceBroadcaster(
 
             val messageJson = json.encodeToString(CrossInstanceMessage.serializer(), crossInstanceMessage)
             try {
-                redisService.publishToUser(userId.toString(), messageJson)
+                // Uses sessionsRedis for Pub/Sub via ShardedRedisService
+                shardedRedisService.publishToUser(userId.toString(), messageJson)
                 println("DEBUG: Published cross-instance notification for user $userId")
             } catch (e: Exception) {
                 println("ERROR: Failed to publish user notification: ${e.message}")

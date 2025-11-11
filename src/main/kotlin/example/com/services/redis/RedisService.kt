@@ -45,8 +45,10 @@ data class SocialEvent(
 *
 * Added explicit methods for Pub/Sub and separate Streams for different workflows
 */
-// RedisService.kt
-class RedisService(redisUrl: String) {
+class RedisService(
+    redisUrl: String,
+    val redisRole: RedisRole
+) {
     val redisClient: RedisClient = RedisClient.create(redisUrl)
 
     // Separate connections for producers and consumers
@@ -95,80 +97,84 @@ class RedisService(redisUrl: String) {
         }
     }
 
-    /**
-     * Add event to chat stream for durable processing
-     */
-    private suspend fun addToChatStream(event: LiveEvent, eventJson: String) {
+    // ==================================================
+    // STREAM OPERATIONS (Role-specific)
+    // ==================================================
+
+    suspend fun addToChatStream(event: LiveEvent, eventJson: String) {
+        if (redisRole != RedisRole.CHAT) {
+            throw IllegalStateException("Chat stream operations not allowed on $redisRole Redis")
+        }
         try {
             producerCommands.xadd(RedisStreams.CHAT_STREAM, mapOf("event" to eventJson)).awaitFuture()
-            println("DEBUG: Added to chat stream: ${event::class.simpleName}")
+            println("DEBUG: [$redisRole] Added to chat stream: ${event::class.simpleName}")
         } catch (e: Exception) {
-            println("ERROR: Failed to add to chat stream: ${e.message}")
+            println("ERROR: [$redisRole] Failed to add to chat stream: ${e.message}")
             throw e
         }
     }
 
-    /**
-     * Add event to moderation stream for audit trail
-     */
     suspend fun addToModerationStream(event: LiveEvent, eventJson: String) {
+        if (redisRole != RedisRole.MODERATION) {
+            throw IllegalStateException("Moderation stream operations not allowed on $redisRole Redis")
+        }
         try {
             producerCommands.xadd(RedisStreams.MODERATION_STREAM, mapOf("event" to eventJson)).awaitFuture()
-            println("DEBUG: Added to moderation stream: ${event::class.simpleName}")
+            println("DEBUG: [$redisRole] Added to moderation stream: ${event::class.simpleName}")
         } catch (e: Exception) {
-            println("ERROR: Failed to add to moderation stream: ${e.message}")
+            println("ERROR: [$redisRole] Failed to add to moderation stream: ${e.message}")
             throw e
         }
     }
 
-    /**
-     * Add event to analytics stream for business intelligence
-     */
-    private suspend fun addToAnalyticsStream(event: LiveEvent, eventJson: String) {
+    suspend fun addToAnalyticsStream(event: LiveEvent, eventJson: String) {
+        if (redisRole != RedisRole.ANALYTICS) {
+            throw IllegalStateException("Analytics stream operations not allowed on $redisRole Redis")
+        }
         try {
             producerCommands.xadd(RedisStreams.ANALYTICS_STREAM, mapOf("event" to eventJson)).awaitFuture()
-            println("DEBUG: Added to analytics stream: ${event::class.simpleName}")
+            println("DEBUG: [$redisRole] Added to analytics stream: ${event::class.simpleName}")
         } catch (e: Exception) {
-            println("ERROR: Failed to add to analytics stream: ${e.message}")
+            println("ERROR: [$redisRole] Failed to add to analytics stream: ${e.message}")
             throw e
         }
     }
 
-    /**
-     * Add gift event to billing stream for financial reconciliation
-     */
-    private suspend fun addToBillingStream(event: LiveEvent, eventJson: String) {
+    suspend fun addToBillingStream(event: LiveEvent, eventJson: String) {
+        if (redisRole != RedisRole.BILLING) {
+            throw IllegalStateException("Billing stream operations not allowed on $redisRole Redis")
+        }
         try {
             producerCommands.xadd(RedisStreams.BILLING_STREAM, mapOf("event" to eventJson)).awaitFuture()
-            println("DEBUG: Added to billing stream: ${event::class.simpleName}")
+            println("DEBUG: [$redisRole] Added to billing stream: ${event::class.simpleName}")
         } catch (e: Exception) {
-            println("ERROR: Failed to add to billing stream: ${e.message}")
+            println("ERROR: [$redisRole] Failed to add to billing stream: ${e.message}")
             throw e
         }
     }
 
-    /**
-     * Add social event to social stream for notification processing
-     */
-    private suspend fun addToSocialStream(event: LiveEvent, eventJson: String) {
+    suspend fun addToSocialStream(event: LiveEvent, eventJson: String) {
+        if (redisRole != RedisRole.SOCIAL) {
+            throw IllegalStateException("Social stream operations not allowed on $redisRole Redis")
+        }
         try {
             producerCommands.xadd(RedisStreams.SOCIAL_STREAM, mapOf("event" to eventJson)).awaitFuture()
-            println("DEBUG: Added to social stream: ${event::class.simpleName}")
+            println("DEBUG: [$redisRole] Added to social stream: ${event::class.simpleName}")
         } catch (e: Exception) {
-            println("ERROR: Failed to add to social stream: ${e.message}")
+            println("ERROR: [$redisRole] Failed to add to social stream: ${e.message}")
             throw e
         }
     }
 
-    /**
-     * Add control event to control stream for system coordination
-     */
-    private suspend fun addToControlStream(event: LiveEvent, eventJson: String) {
+    suspend fun addToControlStream(event: LiveEvent, eventJson: String) {
+        if (redisRole != RedisRole.SESSIONS) {
+            throw IllegalStateException("Control stream operations not allowed on $redisRole Redis")
+        }
         try {
             producerCommands.xadd(RedisStreams.CROSS_INSTANCE_CONTROL, mapOf("event" to eventJson)).awaitFuture()
-            println("DEBUG: Added to control stream: ${event::class.simpleName}")
+            println("DEBUG: [$redisRole] Added to control stream: ${event::class.simpleName}")
         } catch (e: Exception) {
-            println("ERROR: Failed to add to control stream: ${e.message}")
+            println("ERROR: [$redisRole] Failed to add to control stream: ${e.message}")
             throw e
         }
     }
@@ -207,24 +213,24 @@ class RedisService(redisUrl: String) {
     }
 
     /**
-     * Creates consumer groups for all streams if they don't exist
+     * Creates consumer groups for this Redis instance's streams
      */
     suspend fun initializeStreamConsumerGroups() {
-        val streams = listOf(
-            RedisStreams.CHAT_STREAM,
-            RedisStreams.MODERATION_STREAM,
-            RedisStreams.ANALYTICS_STREAM,
-            RedisStreams.BILLING_STREAM,
-            RedisStreams.SOCIAL_STREAM,
-            RedisStreams.CROSS_INSTANCE_CONTROL
-        )
+        val streams = when (redisRole) {
+            RedisRole.CHAT -> listOf(RedisStreams.CHAT_STREAM)
+            RedisRole.MODERATION -> listOf(RedisStreams.MODERATION_STREAM)
+            RedisRole.ANALYTICS -> listOf(RedisStreams.ANALYTICS_STREAM)
+            RedisRole.BILLING -> listOf(RedisStreams.BILLING_STREAM)
+            RedisRole.SOCIAL -> listOf(RedisStreams.SOCIAL_STREAM)
+            RedisRole.SESSIONS -> listOf(RedisStreams.CROSS_INSTANCE_CONTROL)
+        }
 
         streams.forEach { stream ->
             try {
                 createConsumerGroupIfNotExists(stream, "${stream}_group")
-                println("DEBUG: Initialized consumer group for stream: $stream")
+                println("DEBUG: [$redisRole] Initialized consumer group for stream: $stream")
             } catch (e: Exception) {
-                println("WARN: Failed to initialize consumer group for $stream: ${e.message}")
+                println("WARN: [$redisRole] Failed to initialize consumer group for $stream: ${e.message}")
             }
         }
     }
@@ -284,6 +290,9 @@ class RedisService(redisUrl: String) {
      * Publish real-time event to a room channel
      */
     suspend fun publishToRoom(roomId: String, eventJson: String) {
+        if (redisRole != RedisRole.SESSIONS) {
+            throw IllegalStateException("Pub/Sub operations not allowed on $redisRole Redis")
+        }
         producerCommands.publish("${RedisStreams.ROOM_EVENTS_PREFIX}$roomId", eventJson).awaitFuture()
     }
 
@@ -291,6 +300,9 @@ class RedisService(redisUrl: String) {
      * Publish user notification
      */
     suspend fun publishToUser(userId: String, eventJson: String) {
+        if (redisRole != RedisRole.SESSIONS) {
+            throw IllegalStateException("Pub/Sub operations not allowed on $redisRole Redis")
+        }
         producerCommands.publish(RedisStreams.USER_NOTIFICATIONS_CHANNEL, eventJson).awaitFuture()
     }
 
@@ -302,6 +314,9 @@ class RedisService(redisUrl: String) {
      * Adds chat messages to room history with size limit
      */
     suspend fun addToHistory(roomId: String, event: LiveEvent) {
+        if (redisRole != RedisRole.CHAT) {
+            throw IllegalStateException("History operations not allowed on $redisRole Redis")
+        }
         if (event is LiveEvent.ChatMessage || event is LiveEvent.SystemMessage) {
             val key = "${RedisStreams.ROOM_HISTORY_PREFIX}$roomId"
             val safe = event.withDefaults()
@@ -316,6 +331,9 @@ class RedisService(redisUrl: String) {
      * Retrieves chat history for a room
      */
     suspend fun getRoomHistory(roomId: String): List<LiveEvent> {
+        if (redisRole != RedisRole.CHAT) {
+            throw IllegalStateException("History operations not allowed on $redisRole Redis")
+        }
         val key = "${RedisStreams.ROOM_HISTORY_PREFIX}$roomId"
         val jsonList = producerCommands.lrange(key, 0, -1).awaitFuture()
         return jsonList.reversed().mapNotNull { jsonStr ->
@@ -331,6 +349,9 @@ class RedisService(redisUrl: String) {
      * Deletes room history (cleanup when room ends)
      */
     suspend fun deleteHistory(roomId: String) {
+        if (redisRole != RedisRole.CHAT) {
+            throw IllegalStateException("History operations not allowed on $redisRole Redis")
+        }
         producerCommands.del("${RedisStreams.ROOM_HISTORY_PREFIX}$roomId").awaitFuture()
     }
 
@@ -342,8 +363,10 @@ class RedisService(redisUrl: String) {
      * Increments a counter value in Redis with TTL
      */
     suspend fun incrementCounter(key: String, value: Long): Long {
+        if (redisRole != RedisRole.SESSIONS) {
+            throw IllegalStateException("Counter operations not allowed on $redisRole Redis")
+        }
         val result = producerCommands.incrby(key, value).awaitFuture()
-        // Set TTL if this is a new key
         producerCommands.expire(key, COUNTER_TTL_HOURS * 3600).awaitFuture()
         return result
     }
@@ -352,6 +375,9 @@ class RedisService(redisUrl: String) {
      * Increments user-specific like count for a room
      */
     suspend fun incrementUserLikeCount(roomId: String, userId: String, count: Long): Long {
+        if (redisRole != RedisRole.SESSIONS) {
+            throw IllegalStateException("Counter operations not allowed on $redisRole Redis")
+        }
         val key = "${RedisStreams.ROOM_COUNTERS_PREFIX}$roomId:user_likes:$userId"
         return incrementCounter(key, count)
     }
@@ -359,31 +385,33 @@ class RedisService(redisUrl: String) {
     /**
      * Gets counter value from Redis
      */
-    suspend fun getCounter(key: String): Long? =
-        producerCommands.get(key).awaitFuture()?.toLongOrNull()
+    suspend fun getCounter(key: String): Long? {
+        if (redisRole != RedisRole.SESSIONS) {
+            throw IllegalStateException("Counter operations not allowed on $redisRole Redis")
+        }
+        return producerCommands.get(key).awaitFuture()?.toLongOrNull()
+    }
 
     /**
      * Cleans up all Redis data for a room when it ends
      */
     suspend fun deleteCounters(roomId: String) {
+        if (redisRole != RedisRole.SESSIONS) {
+            throw IllegalStateException("Counter operations not allowed on $redisRole Redis")
+        }
         val keysToDelete = mutableListOf<String>()
 
-        // Basic counters
         keysToDelete.add("${RedisStreams.ROOM_COUNTERS_PREFIX}$roomId:likes")
 
-        // User like counters
         val userKeys = producerCommands.keys("${RedisStreams.ROOM_COUNTERS_PREFIX}$roomId:user_likes:*").awaitFuture()
         keysToDelete.addAll(userKeys)
 
-        // Gift counters
         val giftKeys = producerCommands.keys("${RedisStreams.ROOM_COUNTERS_PREFIX}$roomId:gifts:*").awaitFuture()
         keysToDelete.addAll(giftKeys)
 
         if (keysToDelete.isNotEmpty()) {
             producerCommands.del(*keysToDelete.toTypedArray()).awaitFuture()
         }
-
-        deleteHistory(roomId)
     }
 
     // ==================================================
@@ -393,21 +421,39 @@ class RedisService(redisUrl: String) {
     /**
      * Room user operations with TTL
      */
-    suspend fun getRoomUserCount(roomId: String): Long =
-        producerCommands.scard("room:$roomId:users").awaitFuture()
+    suspend fun getRoomUserCount(roomId: String): Long {
+        if (redisRole != RedisRole.SESSIONS) {
+            throw IllegalStateException("Session operations not allowed on $redisRole Redis")
+        }
+        return producerCommands.scard("room:$roomId:users").awaitFuture()
+    }
 
-    suspend fun isUserInRoom(roomId: String, userId: String): Boolean =
-        producerCommands.sismember("room:$roomId:users", userId).awaitFuture()
+    suspend fun isUserInRoom(roomId: String, userId: String): Boolean {
+        if (redisRole != RedisRole.SESSIONS) {
+            throw IllegalStateException("Session operations not allowed on $redisRole Redis")
+        }
+        return producerCommands.sismember("room:$roomId:users", userId).awaitFuture()
+    }
 
-    suspend fun getRoomUsers(roomId: String): Set<String> =
-        producerCommands.smembers("room:$roomId:users").awaitFuture() ?: emptySet()
+    suspend fun getRoomUsers(roomId: String): Set<String> {
+        if (redisRole != RedisRole.SESSIONS) {
+            throw IllegalStateException("Session operations not allowed on $redisRole Redis")
+        }
+        return producerCommands.smembers("room:$roomId:users").awaitFuture() ?: emptySet()
+    }
 
     suspend fun addUserToRoom(roomId: String, userId: String) {
+        if (redisRole != RedisRole.SESSIONS) {
+            throw IllegalStateException("Session operations not allowed on $redisRole Redis")
+        }
         producerCommands.sadd("room:$roomId:users", userId).awaitFuture()
         producerCommands.expire("room:$roomId:users", SESSION_TTL_HOURS * 3600).awaitFuture()
     }
 
     suspend fun removeUserFromRoom(roomId: String, userId: String) {
+        if (redisRole != RedisRole.SESSIONS) {
+            throw IllegalStateException("Session operations not allowed on $redisRole Redis")
+        }
         producerCommands.srem("room:$roomId:users", userId).awaitFuture()
     }
 

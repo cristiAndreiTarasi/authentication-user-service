@@ -12,6 +12,7 @@ import example.com.schemas.StreamSchema
 import example.com.schemas.UserSchema
 import example.com.services.gridfs.GridFSService
 import example.com.services.redis.RedisService
+import example.com.services.redis.ShardedRedisService
 import example.com.services.token.ITokenService
 import example.com.services.token.TokenClaim
 import example.com.services.ws_session.DistributedPermissionManager
@@ -49,7 +50,7 @@ fun Route.streamRoutes(
     publishTokenService: ITokenService,
     userSchema: UserSchema,
     distributedPermissionManager: DistributedPermissionManager,
-    redisService: RedisService
+    shardedRedisService: ShardedRedisService
 ) {
     authenticate("auth-jwt") {
         // Route to get a specific stream by ID
@@ -268,7 +269,7 @@ fun Route.streamRoutes(
 
             try {
                 println("DEBUG: calling setStreamOwner(...)")
-                val pingOk = try { redisService.ping() } catch (e: Exception) {
+                val pingOk = try { shardedRedisService.pingAll() } catch (e: Exception) {
                     println("ERROR: redis ping failed before setStreamOwner: ${e.message}")
                     false
                 }
@@ -285,9 +286,9 @@ fun Route.streamRoutes(
 
                 // Persist mapping streamKey -> streamId for server-side resolution
                 try {
-                    redisService.set("streamKey:$streamKey:streamId", streamId.toString())
+                    shardedRedisService.set("streamKey:$streamKey:streamId", streamId.toString())
                     // Optionally set TTL similar to PERMISSION_TTL if you want mapping to expire:
-                    // redisService.expire("streamKey:$streamKey:streamId", PERMISSION_TTL.seconds)
+                    // shardedRedisService.expire("streamKey:$streamKey:streamId", PERMISSION_TTL.seconds)
                     println("DEBUG: persisted mapping streamKey:$streamKey -> $streamId")
                 } catch (e: Exception) {
                     println("WARN: failed to persist streamKey->streamId mapping: ${e.message}")

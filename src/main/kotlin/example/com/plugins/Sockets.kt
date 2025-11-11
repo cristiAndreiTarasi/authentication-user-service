@@ -13,6 +13,7 @@ import example.com.schemas.UserSchema
 import example.com.services.ServiceManager
 import example.com.services.notifications.NotificationSessionRegistry
 import example.com.services.redis.RedisService
+import example.com.services.redis.ShardedRedisService
 import example.com.services.token.TokenService
 import example.com.services.ws_session.LiveRoomSessionRegistry
 import example.com.services.ws_session.WebSocketAuthHelper
@@ -38,13 +39,13 @@ import java.time.Duration
 /**
  * Configures WebSocket endpoints for live streaming rooms and notifications with distributed session management.
  *
- * @param redisService Redis service for event streaming and persistence
+ * @param shardedRedisService Redis service for event streaming and persistence
  * @param userSchema Database access for user data
  * @param notificationSchema Database access for notification data
  * @param authTokenService Service for JWT authentication
  */
 fun Application.configureSockets(
-    redisService: RedisService,
+    shardedRedisService: ShardedRedisService,
     userSchema: UserSchema,
     notificationSchema: NotificationSchema,
     authTokenService: TokenService,
@@ -75,7 +76,7 @@ fun Application.configureSockets(
     * @param roomId The room ID to update stats for
     * @param redisManager Redis service for storing and broadcasting stats
     */
-    suspend fun updateStreamStats(roomId: String, redisManager: RedisService) {
+    suspend fun updateStreamStats(roomId: String, redisManager: ShardedRedisService) {
         val viewerCount = distributedSessionManager.getRoomUsers(roomId).size
         val totalLikes = redisManager.getCounter("room:$roomId:likes") ?: 0
 
@@ -112,7 +113,7 @@ fun Application.configureSockets(
                     } finally {
                         LiveRoomSessionRegistry.removeSession(session)
                         distributedSessionManager.removeSession(event.targetUserId, event.roomId)
-                        updateStreamStats(event.roomId, redisService)
+                        updateStreamStats(event.roomId, shardedRedisService)
                     }
                 }
 
@@ -292,7 +293,7 @@ fun Application.configureSockets(
     suspend fun sendInitialState(
         roomId: String,
         session: WebSocketSession,
-        redisManager: RedisService
+        redisManager: ShardedRedisService
     ) {
         val viewerCount = distributedSessionManager.getRoomUsers(roomId).size
         val totalLikes = redisManager.getCounter("room:$roomId:likes") ?: 0
@@ -338,7 +339,7 @@ fun Application.configureSockets(
         event: LiveEvent,
         userId: String,
         roomId: String,
-        redisManager: RedisService,
+        redisManager: ShardedRedisService,
         session: WebSocketSession? = null
     ) {
         // Ignore any client events if the user is kicked.
@@ -761,7 +762,7 @@ fun Application.configureSockets(
 
                     try {
                         // Send chat history first
-                        val history = redisService.getRoomHistory(roomId)
+                        val history = shardedRedisService.getRoomHistory(roomId)
                         history.forEach { event ->
                             val json =
                                 LiveEventJson.encodeToString(liveEventPolymorphic, event.withDefaults())
@@ -769,7 +770,7 @@ fun Application.configureSockets(
                         }
 
                         // Send initial state
-                        sendInitialState(roomId, this, redisService)
+                        sendInitialState(roomId, this, shardedRedisService)
 
                         // Send stream owner info if available
                         sendStreamOwnerInfo(roomId, this, userSchema)
@@ -781,7 +782,7 @@ fun Application.configureSockets(
                             username = username,
                             timestamp = System.currentTimeMillis()
                         )
-                        handleLiveRoomEvent(joinEvent, userId, roomId, redisService)
+                        handleLiveRoomEvent(joinEvent, userId, roomId, shardedRedisService)
 
                         // Listen for incoming messages
                         for (frame in incoming) {
@@ -793,7 +794,7 @@ fun Application.configureSockets(
                                     try {
                                         val event = LiveEventJson.decodeFromString<LiveEvent>(text)
                                         println("DEBUG: PARSED EVENT: ${event::class.simpleName}")
-                                        handleLiveRoomEvent(event, userId, roomId, redisService, this)
+                                        handleLiveRoomEvent(event, userId, roomId, shardedRedisService, this)
                                     } catch (e: Exception) {
                                         println("DEBUG: PARSE ERROR: ${e.message}")
                                     }
@@ -815,7 +816,7 @@ fun Application.configureSockets(
                             timestamp = System.currentTimeMillis()
                         )
 
-                        handleLiveRoomEvent(leaveEvent, userId, roomId, redisService)
+                        handleLiveRoomEvent(leaveEvent, userId, roomId, shardedRedisService)
 
                         // Check if stream owner is leaving
                         if (distributedPermissionManager.isStreamOwner(roomId, userId)) {
@@ -846,13 +847,13 @@ fun Application.configureSockets(
 
                             // Use distributed permission manager for cleanup
                             distributedPermissionManager.removeRoom(roomId)
-                            redisService.deleteCounters(roomId)
+                            shardedRedisService.deleteCounters(roomId)
                         } else {
                             // Only clean up if room is empty across all instances
                             val roomUsers = distributedSessionManager.getRoomUsers(roomId)
                             if (roomUsers.isEmpty()) {
                                 distributedPermissionManager.removeRoom(roomId)
-                                redisService.deleteCounters(roomId)
+                                shardedRedisService.deleteCounters(roomId)
                                 sendStreamEndedEvent(roomId)
                             }
                         }

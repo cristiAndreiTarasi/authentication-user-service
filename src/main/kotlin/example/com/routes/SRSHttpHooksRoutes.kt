@@ -5,7 +5,7 @@ import com.auth0.jwt.algorithms.Algorithm
 import example.com.routes.dtos.SrsHookPayload
 import example.com.schemas.StreamSchema
 import example.com.schemas.UserSchema
-import example.com.services.redis.RedisService
+import example.com.services.redis.ShardedRedisService
 import example.com.services.token.ITokenService
 import io.ktor.client.HttpClient
 import io.ktor.client.plugins.timeout
@@ -51,7 +51,7 @@ fun Route.srsHttpHookRoutes(
     publishTokenService: ITokenService,
     streamSchema: StreamSchema,
     httpClient: HttpClient,
-    redisService: RedisService,
+    shardedRedisService: ShardedRedisService,
     moderationPublishSecret: String
 ) {
     route("/v1/streams") {
@@ -63,7 +63,7 @@ fun Route.srsHttpHookRoutes(
             }
 
             val ok = try {
-                processSrsHook(call, payload, publishTokenService, streamSchema, userSchema, httpClient, redisService, moderationPublishSecret)
+                processSrsHook(call, payload, publishTokenService, streamSchema, userSchema, httpClient, shardedRedisService, moderationPublishSecret)
             } catch (e: Exception) {
                 application.log.error("srsHttpHook: handler error", e)
                 false
@@ -82,13 +82,13 @@ private suspend fun processSrsHook(
     streamSchema: StreamSchema,
     userSchema: UserSchema,
     httpClient: HttpClient,
-    redisManager: RedisService,
+    shardedRedisService: ShardedRedisService,
     moderationPublishSecret: String
 ): Boolean {
     val action = SrsHookAction.fromActionName(payload.action)
 
     return when (action) {
-        SrsHookAction.ON_PUBLISH -> handleOnPublish(call, payload, publishTokenService, streamSchema, userSchema, httpClient, redisManager, moderationPublishSecret)
+        SrsHookAction.ON_PUBLISH -> handleOnPublish(call, payload, publishTokenService, streamSchema, userSchema, httpClient, shardedRedisService, moderationPublishSecret)
         SrsHookAction.ON_UNPUBLISH -> handleOnUnpublish(call, payload, publishTokenService, streamSchema, userSchema)
         SrsHookAction.ON_PLAY -> handleOnPlay(call, payload)
         SrsHookAction.ON_STOP -> handleOnStop(call, payload)
@@ -173,7 +173,7 @@ private suspend fun handleOnPublish(
     streamSchema: StreamSchema,
     userSchema: UserSchema,
     httpClient: HttpClient,
-    redisManager: RedisService,
+    shardedRedisService: ShardedRedisService,
     moderationPublishSecret: String
 ): Boolean {
     val log = call.application.log
@@ -200,7 +200,7 @@ private suspend fun handleOnPublish(
             }
 
             // Check if stream exists and is in blocked state using Redis
-            val streamState = getStreamModerationState(payload.stream, redisManager)
+            val streamState = getStreamModerationState(payload.stream, shardedRedisService)
             if (streamState != "VIDEO_BLOCKED") {
                 log.warn("on_publish: moderation stream attempted for non-blocked stream ${payload.stream}. Current state: $streamState")
                 return false
@@ -310,7 +310,7 @@ private suspend fun handleOnPublish(
                 // Get user details for notification
                 val user = userSchema.findById(record.userId)
                 if (user != null) {
-                    redisManager.triggerLiveNotification(
+                    shardedRedisService.socialRedis.triggerLiveNotification(
                         userId = record.userId,
                         username = user.username,
                         streamId = streamKeyFromToken
@@ -342,14 +342,14 @@ private suspend fun handleOnPublish(
     }
 }
 
-private suspend fun getStreamModerationState(streamId: String, redisManager: RedisService): String? {
+private suspend fun getStreamModerationState(streamId: String, shardedRedisService: ShardedRedisService): String? {
     return try {
         // Get the stream state directly from Redis
         // The moderation controller stores state in Redis at key "stream:${streamId}"
         val redisKey = "stream:$streamId"
 
         // Use your existing RedisManager to get the state
-        val metadata = redisManager.getStreamMetadata(streamId)
+        val metadata = shardedRedisService.socialRedis.getStreamMetadata(streamId)
         metadata["state"]
     } catch (e: Exception) {
         // Log the error but don't fail the entire request

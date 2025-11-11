@@ -13,6 +13,7 @@ import example.com.schemas.NotificationSchema
 import example.com.schemas.UserSchema
 import example.com.services.gridfs.GridFSService
 import example.com.services.redis.RedisService
+import example.com.services.redis.ShardedRedisService
 import example.com.services.token.ITokenService
 import io.ktor.http.ContentType
 import io.ktor.http.HttpStatusCode
@@ -47,7 +48,7 @@ fun Route.userRoutes(
     authTokenService: ITokenService,
     dataSource: DataSource,
     gridFSService: GridFSService,
-    redisService: RedisService
+    shardedRedisService: ShardedRedisService
 ) {
     authenticate("auth-jwt") {
         route("/users") {
@@ -321,7 +322,7 @@ fun Route.userRoutes(
                             )
                         )
 
-                        redisService.addSocialEvent(
+                        shardedRedisService.socialRedis.addSocialEvent(
                             type = SocialEventType.FOLLOW,
                             actorId = currentUserId,
                             targetId = targetId,
@@ -363,7 +364,7 @@ fun Route.userRoutes(
                 val ok = userSchema.unfollowUser(currentUserId, targetId)
                 if (ok) {
                     try {
-                        redisService.addSocialEvent(
+                        shardedRedisService.socialRedis.addSocialEvent(
                             type = SocialEventType.UNFOLLOW,
                             actorId = currentUserId,
                             targetId = targetId,

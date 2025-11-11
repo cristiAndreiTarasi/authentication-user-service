@@ -9,6 +9,7 @@ import example.com.routes.dtos.LiveEvent
 import example.com.routes.dtos.withDefaults
 import example.com.schemas.StreamSchema
 import example.com.services.redis.RedisService
+import example.com.services.redis.ShardedRedisService
 import example.com.services.ws_session.DistributedPermissionManager
 import example.com.services.ws_session.LiveRoomSessionRegistry
 import io.ktor.http.HttpStatusCode
@@ -54,7 +55,7 @@ data class StreamStatusResponse(
 )
 
 fun Route.moderationRoutes(
-    redisManager: RedisService,
+    shardedRedisManager: ShardedRedisService,
     streamSchema: StreamSchema,
     moderationPublishSecret: String,
     distributedPermissionManager: DistributedPermissionManager
@@ -83,7 +84,7 @@ fun Route.moderationRoutes(
     suspend fun addModerationEventToStream(event: LiveEvent) {
         val safeEvent = event.withDefaults()
         val eventJson = LiveEventJson.encodeToString(liveEventPolymorphic, safeEvent)
-        redisManager.addToModerationStream(event, eventJson)
+        shardedRedisManager.addToCategorizedStream(event)
     }
 
     route("/internal/moderation") {
@@ -278,9 +279,7 @@ fun Route.moderationRoutes(
                 }
 
                 val sessionCount = LiveRoomSessionRegistry.getRoomSessions(roomId).size
-                val metadata = redisManager.getStreamMetadata(roomId)
-                val isAudioOnly = metadata["proxy_type"] == "audio_only"
-                val audioUrl = metadata["audio_url"]
+                val metadata = shardedRedisManager.socialRedis.getStreamMetadata(roomId)
 
                 call.respond(StreamStatusResponse(
                     streamId = roomId,

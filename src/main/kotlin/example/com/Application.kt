@@ -21,6 +21,7 @@ import example.com.services.gridfs.GridFSService
 import example.com.services.hashing.HashingService
 import example.com.services.redis.RedisService
 import example.com.services.redis.RedisStreams
+import example.com.services.redis.ShardedRedisService
 import example.com.services.role.RoleService
 import example.com.services.token.TokenConfig
 import example.com.services.token.TokenService
@@ -81,9 +82,22 @@ fun Application.module() {
         secret = publishSecret
     )
 
-    val host = environment.config.property("db.redis.host").getString()
-    val port = environment.config.property("db.redis.port").getString()
-    val redisService = RedisService("redis://$host:$port")
+    // Redis Sharding Configuration
+    val redisChatUrl = System.getenv("REDIS_CHAT_URL") ?: "redis://localhost:6380"
+    val redisModerationUrl = System.getenv("REDIS_MODERATION_URL") ?: "redis://localhost:6381"
+    val redisAnalyticsUrl = System.getenv("REDIS_ANALYTICS_URL") ?: "redis://localhost:6382"
+    val redisBillingUrl = System.getenv("REDIS_BILLING_URL") ?: "redis://localhost:6383"
+    val redisSocialUrl = System.getenv("REDIS_SOCIAL_URL") ?: "redis://localhost:6384"
+    val redisSessionsUrl = System.getenv("REDIS_SESSIONS_URL") ?: "redis://localhost:6385"
+
+    val shardedRedisService = ShardedRedisService(
+        chatRedisUrl = redisChatUrl,
+        moderationRedisUrl = redisModerationUrl,
+        analyticsRedisUrl = redisAnalyticsUrl,
+        billingRedisUrl = redisBillingUrl,
+        socialRedisUrl = redisSocialUrl,
+        sessionsRedisUrl = redisSessionsUrl
+    )
 
     //moderation
     val moderationPublishSecret = environment.config.property("jwt.moderation.publishSecret").getString()
@@ -105,7 +119,7 @@ fun Application.module() {
 
     // Initialize service manager BEFORE configuring sockets and routing
     val serviceManager = ServiceManager(
-        redisService = redisService,
+        shardedRedisService = shardedRedisService,
         userSchema = userSchema,
         notificationSchema = notificationSchema,
         authTokenService = authTokenService
@@ -118,7 +132,7 @@ fun Application.module() {
     configureSerialization(AppJson)
     configureHTTP()
     configureSockets(
-        redisService,
+        shardedRedisService,
         userSchema,
         notificationSchema,
         authTokenService,
@@ -129,7 +143,7 @@ fun Application.module() {
         eventSchema, tagSchema, categorySchema,
         hashingService, dataSource, gridFsService,
         httpClient, authTokenService, publishTokenService,
-        redisService, moderationPublishSecret, notificationSchema,
+        shardedRedisService, moderationPublishSecret, notificationSchema,
         serviceManager
     )
 
@@ -150,8 +164,9 @@ fun Application.module() {
             }
 
             get("/redis") {
-                val isConnected = redisService.ping()
+                val isConnected = shardedRedisService.pingAll()
                 val redisInfo = mapOf(
+                    "connected" to isConnected,
                     "chat_stream" to RedisStreams.CHAT_STREAM,
                     "moderation_stream" to RedisStreams.MODERATION_STREAM,
                     "analytics_stream" to RedisStreams.ANALYTICS_STREAM,
@@ -161,6 +176,19 @@ fun Application.module() {
                 )
                 call.respond(redisInfo)
             }
+
+            get("/shards") {
+                val shardInfo = mapOf(
+                    "chat" to redisChatUrl,
+                    "moderation" to redisModerationUrl,
+                    "analytics" to redisAnalyticsUrl,
+                    "billing" to redisBillingUrl,
+                    "social" to redisSocialUrl,
+                    "sessions" to redisSessionsUrl,
+                    "instance_id" to serviceManager.instanceId
+                )
+                call.respond(shardInfo)
+            }
         }
     }
 
@@ -169,7 +197,7 @@ fun Application.module() {
         println("🛑 Application stopping - cleaning up resources...")
 
         serviceManager.stopAllServices()
-        redisService.close()
+        shardedRedisService.close()
         httpClient.close()
 
         // Close Hikari if we have it

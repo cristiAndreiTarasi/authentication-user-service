@@ -4,6 +4,7 @@ import example.com.schemas.NotificationSchema
 import example.com.schemas.UserSchema
 import example.com.services.workers.NotificationWorker
 import example.com.services.redis.RedisService
+import example.com.services.redis.ShardedRedisService
 import example.com.services.token.ITokenService
 import example.com.services.workers.AnalyticsWorker
 import example.com.services.workers.BillingWorker
@@ -23,7 +24,7 @@ import java.util.UUID
  */
 // ServiceManager.kt
 class ServiceManager(
-    private val redisService: RedisService,
+    private val shardedRedisService: ShardedRedisService,
     private val userSchema: UserSchema,
     private val notificationSchema: NotificationSchema,
     private val authTokenService: ITokenService,
@@ -32,16 +33,16 @@ class ServiceManager(
     override val coroutineContext = SupervisorJob() + Dispatchers.Default
 
     // Distributed services
-    val distributedSessionManager = DistributedSessionManager(redisService, instanceId)
-    val distributedPermissionManager = DistributedPermissionManager(redisService)
-    val crossInstanceBroadcaster = CrossInstanceBroadcaster(redisService, instanceId)
-    private val notificationWorker = NotificationWorker(redisService, notificationSchema, userSchema)
+    val distributedSessionManager = DistributedSessionManager(shardedRedisService, instanceId)
+    val distributedPermissionManager = DistributedPermissionManager(shardedRedisService)
+    val crossInstanceBroadcaster = CrossInstanceBroadcaster(shardedRedisService, instanceId)
 
-    // Specialized stream workers
-    private val chatWorker = ChatWorker(redisService)
-    private val moderationWorker = ModerationWorker(redisService)
-    private val analyticsWorker = AnalyticsWorker(redisService)
-    private val billingWorker = BillingWorker(redisService)
+    // Specialized stream workers for each Redis shard
+    private val chatWorker = ChatWorker(shardedRedisService.chatRedis)
+    private val moderationWorker = ModerationWorker(shardedRedisService.moderationRedis)
+    private val analyticsWorker = AnalyticsWorker(shardedRedisService.analyticsRedis)
+    private val billingWorker = BillingWorker(shardedRedisService.billingRedis)
+    private val notificationWorker = NotificationWorker(shardedRedisService.socialRedis, notificationSchema, userSchema) // ✅ Fixed
 
     // Background jobs
     private var notificationWorkerJob: Job? = null
@@ -63,7 +64,7 @@ class ServiceManager(
         // Initialize Redis stream consumer groups
         launch {
             try {
-                redisService.initializeStreamConsumerGroups()
+                shardedRedisService.initializeStreamConsumerGroups()
                 println("✅ Redis stream consumer groups initialized")
             } catch (e: Exception) {
                 println("❌ Failed to initialize Redis stream consumer groups: ${e.message}")
@@ -78,28 +79,28 @@ class ServiceManager(
 
         // Start specialized stream workers
         chatWorkerJob = launch {
-            println("💬 Starting ChatWorker...")
+            println("💬 Starting ChatWorker (redis-chat)...")
             chatWorker.start()
         }
 
         moderationWorkerJob = launch {
-            println("🛡️ Starting ModerationWorker...")
+            println("🛡️ Starting ModerationWorker (redis-moderation)...")
             moderationWorker.start()
         }
 
         analyticsWorkerJob = launch {
-            println("📊 Starting AnalyticsWorker...")
+            println("📊 Starting AnalyticsWorker (redis-analytics)...")
             analyticsWorker.start()
         }
 
         billingWorkerJob = launch {
-            println("💰 Starting BillingWorker...")
+            println("💰 Starting BillingWorker (redis-billing)...")
             billingWorker.start()
         }
 
-        // Start notification worker (social events)
+        // Start notification worker (social events - uses redis-social)
         notificationWorkerJob = launch {
-            println("🔔 Starting NotificationWorker...")
+            println("🔔 Starting NotificationWorker (redis-social)...")
             notificationWorker.run()
         }
 
@@ -110,9 +111,9 @@ class ServiceManager(
         }
 
         println("✅ All background services started successfully for instance $instanceId")
-        println("   - Streams: Chat, Moderation, Analytics, Billing, Social")
-        println("   - Pub/Sub: Real-time cross-instance events")
-        println("   - Workers: Specialized stream processors")
+        println("   - Redis Shards: chat, moderation, analytics, billing, social, sessions")
+        println("   - Workers: Specialized per shard")
+        println("   - Pub/Sub: Cross-instance via redis-sessions")
     }
 
     /**
@@ -144,23 +145,27 @@ class ServiceManager(
     /**
      * Checks if all services are running properly
      */
+    /**
+     * Checks if all services are running properly
+     */
     suspend fun healthCheck(): Map<String, Boolean> {
+        val redisHealth = shardedRedisService.healthCheck()
+
+        // Fixed: Create pairs explicitly to avoid type mismatch
         return mapOf(
-            "redis_connected" to isRedisConnected(),
+            "redis_chat" to (redisHealth["chat"] ?: false),
+            "redis_moderation" to (redisHealth["moderation"] ?: false),
+            "redis_analytics" to (redisHealth["analytics"] ?: false),
+            "redis_billing" to (redisHealth["billing"] ?: false),
+            "redis_social" to (redisHealth["social"] ?: false),
+            "redis_sessions" to (redisHealth["sessions"] ?: false),
             "cross_instance_running" to crossInstanceBroadcaster.isRunning(),
             "chat_worker_healthy" to chatWorker.isHealthy(),
             "moderation_worker_healthy" to moderationWorker.isHealthy(),
             "analytics_worker_healthy" to analyticsWorker.isHealthy(),
             "billing_worker_healthy" to billingWorker.isHealthy(),
+            "notification_worker_healthy" to notificationWorker.isHealthy(),
             "distributed_sessions_healthy" to true
         )
-    }
-
-    private suspend fun isRedisConnected(): Boolean {
-        return try {
-            redisService.ping()
-        } catch (e: Exception) {
-            false
-        }
     }
 }

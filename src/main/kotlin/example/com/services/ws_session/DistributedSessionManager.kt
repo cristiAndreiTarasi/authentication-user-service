@@ -1,6 +1,7 @@
 package example.com.services.ws_session
 
 import example.com.services.redis.RedisService
+import example.com.services.redis.ShardedRedisService
 import java.time.Duration
 
 /**
@@ -8,7 +9,7 @@ import java.time.Duration
 * Replaces the in-memory SessionManager for room and user session tracking
 */
 class DistributedSessionManager(
-    private val redisService: RedisService,
+    private val shardedRedisService: ShardedRedisService,
     private val instanceId: String
 ) {
     companion object {
@@ -31,15 +32,15 @@ class DistributedSessionManager(
         )
 
         // Store session data (hash) and set TTL
-        redisService.hsetAll(sessionKey, sessionData)
-        redisService.expire(sessionKey, SESSION_TTL.seconds)
+        shardedRedisService.hsetAll(sessionKey, sessionData)
+        shardedRedisService.expire(sessionKey, SESSION_TTL.seconds)
 
         // Add user to room set and set room TTL
-        redisService.sadd("room:$roomId:users", userId)
-        redisService.expire("room:$roomId:users", ROOM_TTL.seconds)
+        shardedRedisService.sadd("room:$roomId:users", userId)
+        shardedRedisService.expire("room:$roomId:users", ROOM_TTL.seconds)
 
         // Track instance→user mapping for cleanup
-        redisService.sadd("instance:$instanceId:users", "$userId:$roomId")
+        shardedRedisService.sadd("instance:$instanceId:users", "$userId:$roomId")
     }
 
     /**
@@ -50,18 +51,18 @@ class DistributedSessionManager(
         val sessionKey = "session:$userId:$roomId"
 
         // Remove user from room
-        redisService.srem("room:$roomId:users", userId)
+        shardedRedisService.srem("room:$roomId:users", userId)
 
         // Remove session data
-        redisService.del(sessionKey)
+        shardedRedisService.del(sessionKey)
 
         // Remove from instance tracking
-        redisService.srem("instance:$instanceId:users", "$userId:$roomId")
+        shardedRedisService.srem("instance:$instanceId:users", "$userId:$roomId")
 
         // If room is empty, clean up room data
-        val roomUsers = redisService.getRoomUsers(roomId)
+        val roomUsers = shardedRedisService.getRoomUsers(roomId)
         if (roomUsers.isEmpty()) {
-            redisService.del("room:$roomId:users")
+            shardedRedisService.del("room:$roomId:users")
         }
     }
 
@@ -69,7 +70,7 @@ class DistributedSessionManager(
      * Gets all users in a room across all instances
      */
     suspend fun getRoomUsers(roomId: String): Set<String> {
-        return redisService.getRoomUsers(roomId)
+        return shardedRedisService.getRoomUsers(roomId)
     }
 
     /**
@@ -77,21 +78,21 @@ class DistributedSessionManager(
      */
     suspend fun getSessionInfo(userId: String, roomId: String): Map<String, String>? {
         val sessionKey = "session:$userId:$roomId"
-        return redisService.hgetall(sessionKey)
+        return shardedRedisService.hgetall(sessionKey)
     }
 
     /**
      * Checks if a user is in a room (any instance)
      */
     suspend fun isUserInRoom(userId: String, roomId: String): Boolean {
-        return redisService.isUserInRoom(roomId, userId)
+        return shardedRedisService.isUserInRoom(roomId, userId)
     }
 
     /**
      * Gets all sessions for this instance (for cleanup)
      */
     private suspend fun getInstanceSessions(): Set<String> {
-        return redisService.smembers("instance:$instanceId:users")
+        return shardedRedisService.smembers("instance:$instanceId:users")
     }
 
     /**
