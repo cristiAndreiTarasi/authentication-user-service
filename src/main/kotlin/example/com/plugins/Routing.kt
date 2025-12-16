@@ -5,6 +5,7 @@ import example.com.routes.categoryRoutes
 import example.com.routes.eventRoutes
 import example.com.routes.moderationRoutes
 import example.com.routes.notificationRoutes
+import example.com.routes.braintreeRoutes
 import example.com.routes.srsHttpHookRoutes
 import example.com.routes.streamRoutes
 import example.com.routes.tagRoutes
@@ -17,9 +18,9 @@ import example.com.schemas.TagSchema
 import example.com.schemas.TokenSchema
 import example.com.schemas.UserSchema
 import example.com.services.ServiceManager
+import example.com.services.braintree.BraintreeService
 import example.com.services.gridfs.GridFSService
 import example.com.services.hashing.HashingService
-import example.com.services.redis.RedisService
 import example.com.services.redis.ShardedRedisService
 import example.com.services.token.ITokenService
 import io.ktor.client.HttpClient
@@ -44,7 +45,8 @@ fun Application.configureRouting(
     shardedRedisService: ShardedRedisService,
     moderationPublishSecret: String,
     notificationSchema: NotificationSchema,
-    serviceManager: ServiceManager
+    serviceManager: ServiceManager,
+    braintreeService: BraintreeService
 ) {
     routing {
         route("/api") {
@@ -89,6 +91,8 @@ fun Application.configureRouting(
                 notificationSchema,
                 authTokenService
             )
+
+            braintreeRoutes(braintreeService)
         }
     }
 }

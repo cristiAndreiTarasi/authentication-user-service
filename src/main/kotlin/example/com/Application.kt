@@ -1,5 +1,7 @@
 package example.com
 
+import com.braintreegateway.BraintreeGateway
+import com.braintreegateway.Environment
 import com.zaxxer.hikari.HikariDataSource
 import example.com.config.AppJson
 import example.com.config.Constants
@@ -17,9 +19,10 @@ import example.com.schemas.TagSchema
 import example.com.schemas.TokenSchema
 import example.com.schemas.UserSchema
 import example.com.services.ServiceManager
+import example.com.services.braintree.BraintreeService
+import example.com.services.braintree.createBraintreeGatewayFromConfig
 import example.com.services.gridfs.GridFSService
 import example.com.services.hashing.HashingService
-import example.com.services.redis.RedisService
 import example.com.services.redis.RedisStreams
 import example.com.services.redis.ShardedRedisService
 import example.com.services.role.RoleService
@@ -107,12 +110,12 @@ fun Application.module() {
 
     val hashingService = HashingService()
     val roleService = RoleService()
-    val gridFsService = GridFSService(mongoDatabase, dataSource)
-    val userSchema = UserSchema(dataSource, gridFsService)
+    val gridFSService = GridFSService(mongoDatabase, dataSource)
+    val userSchema = UserSchema(dataSource, gridFSService)
     val tokenSchema = TokenSchema(dataSource)
     val categorySchema = CategorySchema(dataSource)
     val tagSchema = TagSchema(dataSource)
-    val streamSchema = StreamSchema(dataSource, categorySchema, tagSchema, gridFsService)
+    val streamSchema = StreamSchema(dataSource, categorySchema, tagSchema, gridFSService)
     val eventSchema = EventSchema(dataSource, categorySchema, tagSchema)
 
     val notificationSchema = NotificationSchema(dataSource)
@@ -128,6 +131,15 @@ fun Application.module() {
     // Start all background services
     serviceManager.startAllServices()
 
+    // --- Braintree config (read env first, then application.conf) ---
+    val braintreeGateway = BraintreeGateway(
+        Environment.SANDBOX,
+        System.getenv("BT_MERCHANT_ID") ?: environment.config.property("braintree.merchantId").getString(),
+        System.getenv("BT_PUBLIC_KEY") ?: environment.config.property("braintree.publicKey").getString(),
+        System.getenv("BT_PRIVATE_KEY") ?: environment.config.property("braintree.privateKey").getString()
+    )
+    val braintreeService = BraintreeService(braintreeGateway)
+
     configureSecurity(authTokenConfig)
     configureSerialization(AppJson)
     configureHTTP()
@@ -139,12 +151,23 @@ fun Application.module() {
         serviceManager
     )
     configureRouting(
-        userSchema, tokenSchema, streamSchema,
-        eventSchema, tagSchema, categorySchema,
-        hashingService, dataSource, gridFsService,
-        httpClient, authTokenService, publishTokenService,
-        shardedRedisService, moderationPublishSecret, notificationSchema,
-        serviceManager
+        userSchema              = userSchema,
+        tokenSchema             = tokenSchema,
+        streamSchema            = streamSchema,
+        eventSchema             = eventSchema,
+        tagSchema               = tagSchema,
+        categorySchema          = categorySchema,
+        hashingService          = hashingService,
+        dataSource              = dataSource,
+        gridFSService           = gridFSService,
+        httpClient              = httpClient,
+        authTokenService        = authTokenService,
+        publishTokenService     = publishTokenService,
+        shardedRedisService     = shardedRedisService,
+        moderationPublishSecret = moderationPublishSecret,
+        notificationSchema       = notificationSchema,
+        serviceManager          = serviceManager,
+        braintreeService        = braintreeService
     )
 
     // Health check endpoint for monitoring

@@ -68,8 +68,8 @@ dependencies {
 
     implementation("com.zaxxer:HikariCP:5.0.1")
 
-
-
+    // Braintree
+    implementation("com.braintreepayments.gateway:braintree-java:3.40.0")
 
 
 }
