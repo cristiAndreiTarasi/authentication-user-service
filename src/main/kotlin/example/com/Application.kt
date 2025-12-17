@@ -14,6 +14,7 @@ import example.com.plugins.createPostgresDataSource
 import example.com.schemas.CategorySchema
 import example.com.schemas.EventSchema
 import example.com.schemas.NotificationSchema
+import example.com.schemas.PaymentSchema
 import example.com.schemas.StreamSchema
 import example.com.schemas.TagSchema
 import example.com.schemas.TokenSchema
@@ -117,6 +118,7 @@ fun Application.module() {
     val tagSchema = TagSchema(dataSource)
     val streamSchema = StreamSchema(dataSource, categorySchema, tagSchema, gridFSService)
     val eventSchema = EventSchema(dataSource, categorySchema, tagSchema)
+    val paymentSchema = PaymentSchema(dataSource)
 
     val notificationSchema = NotificationSchema(dataSource)
 
@@ -167,7 +169,8 @@ fun Application.module() {
         moderationPublishSecret = moderationPublishSecret,
         notificationSchema       = notificationSchema,
         serviceManager          = serviceManager,
-        braintreeService        = braintreeService
+        braintreeService        = braintreeService,
+        paymentSchema           = paymentSchema,
     )
 
     // Health check endpoint for monitoring

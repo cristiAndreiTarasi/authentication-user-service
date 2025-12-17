@@ -52,7 +52,8 @@ data class ExposedUser(
     @Serializable(with = ObjectIdSerializer::class) val imageId: ObjectId? = null,
     val createdAt: LocalDateTime,
     val timezoneId: String,
-    val isLive: Boolean
+    val isLive: Boolean,
+    val balanceCoins: Long = 0L
 )
 
 @Serializable
@@ -70,6 +71,18 @@ data class UserSearchDto(
     val isFollowing: Boolean,
     val followerCount: Int = 0,
     val isLive: Boolean = false
+)
+
+@Serializable
+data class BalanceResponseDto(
+    val balanceUsd: Double,
+    val balanceCoins: Long
+)
+
+@Serializable
+data class UserBalanceDto(
+    val balanceCoins: Long,
+    val balanceUsd: Double? = null  // Optional: server can compute if needed
 )
 
 class UserSchema(
@@ -240,6 +253,23 @@ class UserSchema(
         connection.prepareStatement(UPDATE_USER_ISSTREAMING).use { statement ->
             statement.setBoolean(1, isLive)
             statement.setInt(2, id)
+            statement.executeUpdate() > 0
+        }
+    }
+
+    suspend fun getBalance(userId: Int): Long? = dbQuery { connection ->
+        connection.prepareStatement("SELECT balance_coins FROM users WHERE id = ?").use { statement ->
+            statement.setInt(1, userId)
+            statement.executeQuery().use { rs ->
+                if (rs.next()) rs.getLong("balance_coins") else null
+            }
+        }
+    }
+
+    suspend fun updateBalance(userId: Int, newBalanceCoins: Long): Boolean = dbQuery { connection ->
+        connection.prepareStatement("UPDATE users SET balance_coins = ? WHERE id = ?").use { statement ->
+            statement.setLong(1, newBalanceCoins)
+            statement.setInt(2, userId)
             statement.executeUpdate() > 0
         }
     }
@@ -417,7 +447,8 @@ class UserSchema(
             birthDate = birthDateSql?.toLocalDate(),
             createdAt = createdAtInstant,
             timezoneId = getString("timezone"),
-            isLive = getBoolean("is_live")
+            isLive = getBoolean("is_live"),
+            balanceCoins = getLong("balance_coins")
         )
     }
 

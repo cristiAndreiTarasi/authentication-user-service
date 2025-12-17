@@ -9,6 +9,8 @@ import example.com.routes.dtos.UpdateOccupationDto
 import example.com.routes.dtos.UpdateUsernameDto
 import example.com.routes.dtos.UploadImageResponse
 import example.com.routes.dtos.UsernameResponse
+import example.com.schemas.BalanceResponseDto
+import example.com.schemas.COINS_PER_USD
 import example.com.schemas.NotificationSchema
 import example.com.schemas.UserSchema
 import example.com.services.gridfs.GridFSService
@@ -39,6 +41,8 @@ import net.coobird.thumbnailator.Thumbnails
 import org.bson.types.ObjectId
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
+import java.math.BigDecimal
+import java.math.RoundingMode
 import java.time.Instant
 import javax.sql.DataSource
 
@@ -518,6 +522,38 @@ fun Route.userRoutes(
                     HttpStatusCode.BadRequest,
                     UploadImageResponse("File content is missing", "")
                 )
+            }
+
+            get("/me/balance") {
+                val principal = call.principal<JWTPrincipal>()
+                    ?: return@get call.respond(HttpStatusCode.Unauthorized)
+
+                val idStr = authTokenService.getClaim(principal, "userId") ?: authTokenService.getClaim(principal, "sub")
+                val userId = idStr?.toIntOrNull()
+                    ?: return@get call.respond(HttpStatusCode.Unauthorized)
+
+                try {
+                    val balanceCoins = userSchema.getBalance(userId) ?: 0L
+
+                    // Calculate USD value (optional - could also compute client-side)
+                    val balanceUsd = BigDecimal.valueOf(balanceCoins)
+                        .divide(COINS_PER_USD, 2, RoundingMode.HALF_UP)
+                        .toDouble()
+
+                    call.respond(
+                        HttpStatusCode.OK,
+                        BalanceResponseDto(
+                            balanceUsd = balanceUsd,
+                            balanceCoins = balanceCoins
+                        )
+                    )
+                } catch (e: Exception) {
+                    call.application.environment.log.error("Failed to fetch balance", e)
+                    call.respond(
+                        HttpStatusCode.InternalServerError,
+                        mapOf("error" to "Failed to fetch balance")
+                    )
+                }
             }
         }
     }

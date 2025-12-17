@@ -9,9 +9,13 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.math.BigDecimal
 
-data class BraintreeClientTokenResponse(val clientToken: String)
-data class BraintreeCheckoutRequest(val payment_method_nonce: String, val amount: String, val device_data: String? = null, val storeInVault: Boolean = false)
-data class BraintreeCheckoutResponse(val success: Boolean, val transactionId: String? = null, val message: String? = null)
+data class BraintreeCheckoutResponse(
+    val success: Boolean,
+    val transactionId: String? = null,
+    val message: String? = null,
+    val paymentInstrumentType: String? = null, // e.g. "paypal_account", "credit_card", "google_pay_card"
+    val status: String? = null                 // e.g. "SUBMITTED_FOR_SETTLEMENT", "SETTLED", etc.
+)
 
 class BraintreeService(
     private val gateway: BraintreeGateway
@@ -28,7 +32,12 @@ class BraintreeService(
      * deviceData is optional but recommended for fraud checks (DataCollector).
      * storeInVault allows creation of vaulted payment methods on success (if merchant/account supports it).
      */
-    suspend fun checkout(nonce: String, amount: String, deviceData: String? = null, storeInVault: Boolean = false): BraintreeCheckoutResponse = withContext(Dispatchers.IO) {
+    suspend fun checkout(
+        nonce: String,
+        amount: String,
+        deviceData: String? = null,
+        storeInVault: Boolean = false
+    ): BraintreeCheckoutResponse = withContext(Dispatchers.IO) {
         try {
             val trReq = TransactionRequest()
                 .amount(BigDecimal(amount))
@@ -47,12 +56,38 @@ class BraintreeService(
 
             if (result.isSuccess) {
                 val tx = result.target
-                BraintreeCheckoutResponse(success = true, transactionId = tx.id, message = "Submitted for settlement")
+                val instrument = try { tx.paymentInstrumentType } catch (_: Throwable) { null }
+                val status = try { tx.status?.toString() } catch (_: Throwable) { null }
+
+                BraintreeCheckoutResponse(
+                    success = true,
+                    transactionId = tx.id,
+                    message = "Submitted for settlement",
+                    paymentInstrumentType = instrument,
+                    status = status
+                )
             } else {
-                BraintreeCheckoutResponse(success = false, transactionId = null, message = result.message ?: "Transaction failed")
+                val maybeTx = result.transaction
+                val instrument = try { maybeTx?.paymentInstrumentType } catch (_: Throwable) { null }
+                val status = try { maybeTx?.status?.toString() } catch (_: Throwable) { null }
+                val msg = result.message ?: "Transaction failed"
+
+                BraintreeCheckoutResponse(
+                    success = false,
+                    transactionId = maybeTx?.id,
+                    message = msg,
+                    paymentInstrumentType = instrument,
+                    status = status
+                )
             }
         } catch (e: Exception) {
-            BraintreeCheckoutResponse(success = false, transactionId = null, message = e.message)
+            BraintreeCheckoutResponse(
+                success = false,
+                transactionId = null,
+                message = e.message ?: "Checkout error",
+                paymentInstrumentType = null,
+                status = null
+            )
         }
     }
 }

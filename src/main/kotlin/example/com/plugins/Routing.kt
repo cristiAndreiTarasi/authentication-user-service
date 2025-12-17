@@ -1,11 +1,11 @@
 package example.com.plugins
 
+import braintreeRoutes
 import example.com.routes.authenticationRoutes
 import example.com.routes.categoryRoutes
 import example.com.routes.eventRoutes
 import example.com.routes.moderationRoutes
 import example.com.routes.notificationRoutes
-import example.com.routes.braintreeRoutes
 import example.com.routes.srsHttpHookRoutes
 import example.com.routes.streamRoutes
 import example.com.routes.tagRoutes
@@ -13,6 +13,7 @@ import example.com.routes.userRoutes
 import example.com.schemas.CategorySchema
 import example.com.schemas.EventSchema
 import example.com.schemas.NotificationSchema
+import example.com.schemas.PaymentSchema
 import example.com.schemas.StreamSchema
 import example.com.schemas.TagSchema
 import example.com.schemas.TokenSchema
@@ -46,7 +47,8 @@ fun Application.configureRouting(
     moderationPublishSecret: String,
     notificationSchema: NotificationSchema,
     serviceManager: ServiceManager,
-    braintreeService: BraintreeService
+    braintreeService: BraintreeService,
+    paymentSchema: PaymentSchema
 ) {
     routing {
         route("/api") {
@@ -92,7 +94,11 @@ fun Application.configureRouting(
                 authTokenService
             )
 
-            braintreeRoutes(braintreeService)
+            braintreeRoutes(
+                braintreeService = braintreeService,
+                paymentSchema = paymentSchema,
+                authTokenService = authTokenService
+            )
         }
     }
 }
