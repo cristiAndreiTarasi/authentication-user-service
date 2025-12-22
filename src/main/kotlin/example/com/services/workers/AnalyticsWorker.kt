@@ -17,10 +17,10 @@ class AnalyticsWorker(
     private val consumerId = "analytics-consumer-${System.getenv("HOSTNAME") ?: "local"}"
 
     suspend fun start() {
-        println("📊 AnalyticsWorker starting for stream: ${RedisStreams.ANALYTICS_STREAM}")
+        println("📊 AnalyticsWorker starting for stream: ${RedisStreams.ANALYTICS_EVENTS}")
 
         try {
-            redisService.createConsumerGroupIfNotExists(RedisStreams.ANALYTICS_STREAM, consumerGroup)
+            redisService.createConsumerGroupIfNotExists(RedisStreams.ANALYTICS_EVENTS, consumerGroup)
         } catch (e: Exception) {
             println("WARN: Error creating analytics consumer group: ${e.message}")
         }
@@ -30,7 +30,7 @@ class AnalyticsWorker(
                 val messages = redisService.consumerCommands.xreadgroup(
                     Consumer.from(consumerGroup, consumerId),
                     XReadArgs.Builder.block(5000).count(100),
-                    XReadArgs.StreamOffset.from(RedisStreams.ANALYTICS_STREAM, ">")
+                    XReadArgs.StreamOffset.from(RedisStreams.ANALYTICS_EVENTS, ">")
                 ).awaitFuture()
 
                 if (messages.isNullOrEmpty()) {
@@ -45,7 +45,7 @@ class AnalyticsWorker(
                         processAnalyticsMessage(msg)
                     } catch (e: Exception) {
                         println("ERROR: Failed to process analytics message ${msg.id}: ${e.message}")
-                        redisService.consumerCommands.xack(RedisStreams.ANALYTICS_STREAM, consumerGroup, msg.id).awaitFuture()
+                        redisService.consumerCommands.xack(RedisStreams.ANALYTICS_EVENTS, consumerGroup, msg.id).awaitFuture()
                     }
                 }
             } catch (e: Exception) {
@@ -68,7 +68,7 @@ class AnalyticsWorker(
         // - Business intelligence
 
         // Ack the message after processing
-        redisService.consumerCommands.xack(RedisStreams.ANALYTICS_STREAM, consumerGroup, msg.id).awaitFuture()
+        redisService.consumerCommands.xack(RedisStreams.ANALYTICS_EVENTS, consumerGroup, msg.id).awaitFuture()
     }
 
     suspend fun isHealthy(): Boolean = true

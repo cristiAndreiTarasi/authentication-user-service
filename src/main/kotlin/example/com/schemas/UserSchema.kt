@@ -79,12 +79,6 @@ data class BalanceResponseDto(
     val balanceCoins: Long
 )
 
-@Serializable
-data class UserBalanceDto(
-    val balanceCoins: Long,
-    val balanceUsd: Double? = null  // Optional: server can compute if needed
-)
-
 class UserSchema(
     private val dataSource: DataSource,
     private val gridFSService: GridFSService

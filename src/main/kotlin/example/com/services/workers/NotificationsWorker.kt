@@ -10,6 +10,7 @@ import example.com.schemas.NotificationSchema
 import example.com.schemas.UserSchema
 import example.com.services.notifications.NotificationSessionRegistry
 import example.com.services.redis.RedisService
+import example.com.services.redis.RedisStreams.SOCIAL_EVENTS
 import example.com.services.redis.SocialEvent
 import io.lettuce.core.Consumer
 import io.lettuce.core.StreamMessage
@@ -20,9 +21,6 @@ import kotlinx.serialization.json.Json
 import java.util.concurrent.Executors
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
-import kotlin.coroutines.resume
-import kotlin.coroutines.resumeWithException
-import kotlin.coroutines.suspendCoroutine
 
 /**
 * Background worker that consumes social events from Redis streams
@@ -39,7 +37,7 @@ class NotificationWorker(
     private val userSchema: UserSchema,
     private val consumerGroup: String = "notifications-group",
     private val consumerId: String = "notif-consumer-${System.getenv("HOSTNAME") ?: "local"}",
-    private val streamKey: String = "social_events"
+    private val streamKey: String = SOCIAL_EVENTS
 ) {
     private val json: Json = AppJson
 
@@ -173,7 +171,15 @@ class NotificationWorker(
                     redisService.consumerCommands.xack(streamKey, consumerGroup, msg.id).awaitFuture()
                 }
 
-                else -> {
+                SocialEventType.GIFT_SENT -> {
+                    val actorId = event.actorId.toIntOrNull() ?: return
+                    val targetId = event.targetId.toIntOrNull() ?: return
+
+                    // not implemented yet
+                    // handleGiftSocialEvent(evt, actorId, targetId)
+                }
+
+                    else -> {
                     redisService.consumerCommands.xack(streamKey, consumerGroup, msg.id).awaitFuture()
                 }
             }
@@ -206,30 +212,31 @@ class NotificationWorker(
             withContext(notifDispatcher) {
                 chunk.forEach { followerId ->
                     try {
-                        runBlocking(Dispatchers.IO) {
-                            notificationSchema.insertNotification(
-                                userId = followerId,
-                                actorId = actorIdInt,
-                                type = "user_is_live",
-                                text = storedText,
-                                meta = mapOf(
-                                    "actorUsername" to liveUser.username,
-                                    "actorAvatarUrl" to avatarUrl,
-                                    "streamId" to streamId
+                        withContext(notifDispatcher) {
+                            try {
+                                notificationSchema.insertNotificationsBatch(
+                                    actorId = actorIdInt,
+                                    followerIds = chunk,
+                                    type = "user_is_live",
+                                    text = storedText,
+                                    meta = mapOf("actorUsername" to liveUser.username, "streamId" to streamId)
                                 )
-                            )
+                            } catch (e: Exception) { /* log */ }
+
+                            // then send pub/sub events (best-effort)
+                            val liveEvent = NotificationEvent.UserIsLive(
+                                userId = followerId.toString(),
+                                actorId = event.actorId,
+                                actorUsername = liveUser.username,
+                                actorAvatarUrl = avatarUrl,
+                                text = storedText
+                            ).withDefaults()
+
+                            chunk.forEach { followerId ->
+                                val eventJson = json.encodeToString(liveEvent)
+                                NotificationSessionRegistry.sendToUser(followerId, eventJson)
+                            }
                         }
-
-                        val liveEvent = NotificationEvent.UserIsLive(
-                            userId = followerId.toString(),
-                            actorId = event.actorId,
-                            actorUsername = liveUser.username,
-                            actorAvatarUrl = avatarUrl,
-                            text = storedText
-                        ).withDefaults()
-
-                        val eventJson = json.encodeToString(liveEvent)
-                        NotificationSessionRegistry.sendToUser(followerId, eventJson)
                     } catch (e: Exception) {
                         println("DEBUG: Failed notifying follower $followerId: ${e.message}")
                     }

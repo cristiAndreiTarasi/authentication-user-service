@@ -58,6 +58,8 @@ sealed class LiveEvent {
     @Serializable
     @SerialName("Gift")
     data class Gift(
+        val giftTxId: Long? = null,
+        val idempotency_key: String? = null,
         override val roomId: String,
         override val initiatorId: String?,
         override val timestamp: Long? = null,

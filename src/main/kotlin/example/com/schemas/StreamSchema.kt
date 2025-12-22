@@ -31,6 +31,16 @@ class StreamSchema(
     private val tagSchema: TagSchema,
     private val gridFSService: GridFSService
 ) {
+    // we can also get the stream owner id from [distributedPermissionManager.getStreamOwner()]
+    suspend fun getStreamOwnerById(streamId: Int): Int? = dbQuery { connection ->
+        connection.prepareStatement("SELECT user_id FROM streams WHERE id = ?").use { stmt ->
+            stmt.setInt(1, streamId)
+            stmt.executeQuery().use { rs ->
+                if (rs.next()) rs.getInt("user_id") else null
+            }
+        }
+    }
+
     suspend fun create(stream: StreamDto): Int = dbQuery { connection ->
         connection.prepareStatement(StreamQueries.INSERT_STREAM, Statement.RETURN_GENERATED_KEYS).use { statement ->
             statement.setString(1, stream.title)

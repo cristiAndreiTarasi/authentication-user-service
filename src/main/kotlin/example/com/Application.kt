@@ -13,6 +13,7 @@ import example.com.plugins.configureSockets
 import example.com.plugins.createPostgresDataSource
 import example.com.schemas.CategorySchema
 import example.com.schemas.EventSchema
+import example.com.schemas.GiftsSchema
 import example.com.schemas.NotificationSchema
 import example.com.schemas.PaymentSchema
 import example.com.schemas.StreamSchema
@@ -21,7 +22,7 @@ import example.com.schemas.TokenSchema
 import example.com.schemas.UserSchema
 import example.com.services.ServiceManager
 import example.com.services.braintree.BraintreeService
-import example.com.services.braintree.createBraintreeGatewayFromConfig
+import example.com.services.gifts.GiftsService
 import example.com.services.gridfs.GridFSService
 import example.com.services.hashing.HashingService
 import example.com.services.redis.RedisStreams
@@ -119,6 +120,8 @@ fun Application.module() {
     val streamSchema = StreamSchema(dataSource, categorySchema, tagSchema, gridFSService)
     val eventSchema = EventSchema(dataSource, categorySchema, tagSchema)
     val paymentSchema = PaymentSchema(dataSource)
+    val giftsSchema = GiftsSchema(dataSource)
+    val giftsService = GiftsService(dataSource, giftsSchema, platformCutPercent = 0.20)
 
     val notificationSchema = NotificationSchema(dataSource)
 
@@ -127,7 +130,8 @@ fun Application.module() {
         shardedRedisService = shardedRedisService,
         userSchema = userSchema,
         notificationSchema = notificationSchema,
-        authTokenService = authTokenService
+        dataSource = dataSource,
+        giftsSchema = giftsSchema
     )
 
     // Start all background services
@@ -171,6 +175,8 @@ fun Application.module() {
         serviceManager          = serviceManager,
         braintreeService        = braintreeService,
         paymentSchema           = paymentSchema,
+        giftsSchema             = giftsSchema,
+        giftsService            = giftsService
     )
 
     // Health check endpoint for monitoring
@@ -193,11 +199,11 @@ fun Application.module() {
                 val isConnected = shardedRedisService.pingAll()
                 val redisInfo = mapOf(
                     "connected" to isConnected,
-                    "chat_stream" to RedisStreams.CHAT_STREAM,
-                    "moderation_stream" to RedisStreams.MODERATION_STREAM,
-                    "analytics_stream" to RedisStreams.ANALYTICS_STREAM,
-                    "billing_stream" to RedisStreams.BILLING_STREAM,
-                    "social_stream" to RedisStreams.SOCIAL_STREAM,
+                    "chat_stream" to RedisStreams.CHAT_EVENTS,
+                    "moderation_stream" to RedisStreams.MODERATION_EVENTS,
+                    "analytics_stream" to RedisStreams.ANALYTICS_EVENTS,
+                    "billing_stream" to RedisStreams.BILLING_EVENTS,
+                    "social_stream" to RedisStreams.SOCIAL_EVENTS,
                     "instance_id" to serviceManager.instanceId
                 )
                 call.respond(redisInfo)

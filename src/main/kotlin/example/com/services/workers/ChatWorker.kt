@@ -18,10 +18,10 @@ class ChatWorker(
     private val consumerId = "chat-consumer-${System.getenv("HOSTNAME") ?: "local"}"
 
     suspend fun start() {
-        println("💬 ChatWorker starting for stream: ${RedisStreams.CHAT_STREAM}")
+        println("💬 ChatWorker starting for stream: ${RedisStreams.CHAT_EVENTS}")
 
         try {
-            redisService.createConsumerGroupIfNotExists(RedisStreams.CHAT_STREAM, consumerGroup)
+            redisService.createConsumerGroupIfNotExists(RedisStreams.CHAT_EVENTS, consumerGroup)
         } catch (e: Exception) {
             println("WARN: Error creating chat consumer group: ${e.message}")
         }
@@ -31,7 +31,7 @@ class ChatWorker(
                 val messages = redisService.consumerCommands.xreadgroup(
                     Consumer.from(consumerGroup, consumerId),
                     XReadArgs.Builder.block(5000).count(50),
-                    XReadArgs.StreamOffset.from(RedisStreams.CHAT_STREAM, ">")
+                    XReadArgs.StreamOffset.from(RedisStreams.CHAT_EVENTS, ">")
                 ).awaitFuture()
 
                 if (messages.isNullOrEmpty()) {
@@ -47,7 +47,7 @@ class ChatWorker(
                     } catch (e: Exception) {
                         println("ERROR: Failed to process chat message ${msg.id}: ${e.message}")
                         // Ack problematic messages to avoid blocking
-                        redisService.consumerCommands.xack(RedisStreams.CHAT_STREAM, consumerGroup, msg.id).awaitFuture()
+                        redisService.consumerCommands.xack(RedisStreams.CHAT_EVENTS, consumerGroup, msg.id).awaitFuture()
                     }
                 }
             } catch (e: Exception) {
@@ -70,7 +70,7 @@ class ChatWorker(
         // - Chat analytics
 
         // Ack the message after processing
-        redisService.consumerCommands.xack(RedisStreams.CHAT_STREAM, consumerGroup, msg.id).awaitFuture()
+        redisService.consumerCommands.xack(RedisStreams.CHAT_EVENTS, consumerGroup, msg.id).awaitFuture()
     }
 
     suspend fun isHealthy(): Boolean = true

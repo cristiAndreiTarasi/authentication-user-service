@@ -4,6 +4,7 @@ import braintreeRoutes
 import example.com.routes.authenticationRoutes
 import example.com.routes.categoryRoutes
 import example.com.routes.eventRoutes
+import example.com.routes.giftsRoutes
 import example.com.routes.moderationRoutes
 import example.com.routes.notificationRoutes
 import example.com.routes.srsHttpHookRoutes
@@ -12,6 +13,7 @@ import example.com.routes.tagRoutes
 import example.com.routes.userRoutes
 import example.com.schemas.CategorySchema
 import example.com.schemas.EventSchema
+import example.com.schemas.GiftsSchema
 import example.com.schemas.NotificationSchema
 import example.com.schemas.PaymentSchema
 import example.com.schemas.StreamSchema
@@ -20,6 +22,7 @@ import example.com.schemas.TokenSchema
 import example.com.schemas.UserSchema
 import example.com.services.ServiceManager
 import example.com.services.braintree.BraintreeService
+import example.com.services.gifts.GiftsService
 import example.com.services.gridfs.GridFSService
 import example.com.services.hashing.HashingService
 import example.com.services.redis.ShardedRedisService
@@ -48,7 +51,9 @@ fun Application.configureRouting(
     notificationSchema: NotificationSchema,
     serviceManager: ServiceManager,
     braintreeService: BraintreeService,
-    paymentSchema: PaymentSchema
+    paymentSchema: PaymentSchema,
+    giftsSchema: GiftsSchema,
+    giftsService: GiftsService
 ) {
     routing {
         route("/api") {
@@ -98,6 +103,16 @@ fun Application.configureRouting(
                 braintreeService = braintreeService,
                 paymentSchema = paymentSchema,
                 authTokenService = authTokenService
+            )
+
+            giftsRoutes(
+                giftsSchema = giftsSchema,
+                giftsService = giftsService,
+                authTokenService = authTokenService,
+                streamSchema = streamSchema,
+                shardedRedisService = shardedRedisService,
+                userSchema = userSchema,
+                serviceManager.distributedPermissionManager
             )
         }
     }

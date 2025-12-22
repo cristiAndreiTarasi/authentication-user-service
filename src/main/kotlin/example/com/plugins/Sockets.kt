@@ -13,6 +13,7 @@ import example.com.schemas.UserSchema
 import example.com.services.ServiceManager
 import example.com.services.notifications.NotificationSessionRegistry
 import example.com.services.redis.RedisService
+import example.com.services.redis.RedisStreams
 import example.com.services.redis.ShardedRedisService
 import example.com.services.token.TokenService
 import example.com.services.ws_session.LiveRoomSessionRegistry
@@ -297,16 +298,27 @@ fun Application.configureSockets(
     ) {
         val viewerCount = distributedSessionManager.getRoomUsers(roomId).size
         val totalLikes = redisManager.getCounter("room:$roomId:likes") ?: 0
+        val totalGiftsCoins = redisManager.getCounter("${RedisStreams.ROOM_COUNTERS_PREFIX}$roomId:gifts_total") ?: 0
 
         val streamStatsEvent = LiveEvent.StreamStats(
             roomId = roomId,
             viewerCount = viewerCount,
-            totalLikes = totalLikes
+            totalLikes = totalLikes,
+            timestamp = System.currentTimeMillis()
         )
 
         val json = LiveEventJson.encodeToString(liveEventPolymorphic, streamStatsEvent.withDefaults())
         session.send(Frame.Text(json))
+
+        // send gifts summary as SystemMessage or a new event if you prefer
+        val giftsSummary = LiveEvent.SystemMessage(
+            roomId = roomId,
+            text = "Gifts total: $totalGiftsCoins coins",
+            timestamp = System.currentTimeMillis()
+        )
+        session.send(Frame.Text(LiveEventJson.encodeToString(liveEventPolymorphic, giftsSummary.withDefaults())))
     }
+
 
     /**
      * Sends acknowledgment back to the moderator that their action was queued
@@ -420,9 +432,30 @@ fun Application.configureSockets(
             }
 
             is LiveEvent.Gift -> {
-                // Automatically routes to BILLING_STREAM and ANALYTICS_STREAM via broadcastToRoom
+                // IMPORTANT: do not accept gift creation from websocket clients.
+                // Only server-originated (system) Gift events should be processed here.
+                // We identify server-originated events by initiatorId == "system" or by an explicit giftTxId set.
+                val isServerOrigin = event.initiatorId == "system"
+
+                if (!isServerOrigin) {
+                    // If client attempted to send a Gift via WS, ignore / warn and optionally send an error back
+                    println("WARN: client attempted to send Gift via websocket for room=$roomId user=$userId - clients should call REST endpoint")
+                    // Optionally send a client-visible error system message:
+                    val err = LiveEvent.SystemMessage(
+                        roomId = roomId,
+                        text = "Gifts must be sent via the official gift API",
+                        timestamp = System.currentTimeMillis()
+                    )
+                    crossInstanceBroadcaster.broadcastToRoom(roomId, err)
+                    return
+                }
+
+                // Server-originated gift: proceed with broadcasting + counters (same as before)
                 crossInstanceBroadcaster.broadcastToRoom(roomId, event)
                 redisManager.incrementCounter("room:$roomId:gifts:${event.giftId}", event.quantity.toLong())
+
+                // Optionally update other ephemeral stats:
+                val totalGifts = redisManager.getCounter("${RedisStreams.ROOM_COUNTERS_PREFIX}$roomId:gifts_total") ?: 0
             }
 
             // MODERATION EVENTS (Real-time + Moderation Stream)

@@ -20,6 +20,43 @@ class NotificationSchema(private val dataSource: DataSource) {
         }
     }
 
+    suspend fun insertNotificationsBatch(
+        actorId: Int?,
+        followerIds: List<Int>,
+        type: String,
+        text: String?,
+        meta: Map<String, String> = emptyMap()
+    ): Int = withContext(Dispatchers.IO) {
+        if (followerIds.isEmpty()) return@withContext 0
+
+        val conn = dataSource.connection
+        try {
+            conn.autoCommit = false
+
+            val sql = "INSERT INTO notifications (user_id, actor_id, type, text, meta) VALUES (?, ?, ?, ?, ?::jsonb)"
+            conn.prepareStatement(sql).use { stmt ->
+                val metaJson = Json.encodeToString(meta) // single conversion reused per row
+                for (uid in followerIds) {
+                    stmt.setInt(1, uid)
+                    if (actorId != null) stmt.setInt(2, actorId) else stmt.setNull(2, java.sql.Types.INTEGER)
+                    stmt.setString(3, type)
+                    if (text != null) stmt.setString(4, text) else stmt.setNull(4, java.sql.Types.VARCHAR)
+                    stmt.setString(5, metaJson)
+                    stmt.addBatch()
+                }
+                val counts = stmt.executeBatch() // returns array of update counts
+                conn.commit()
+                counts.count { it >= 0 } // number of inserted rows (>=0 means success or SUCCESS_NO_INFO)
+            }
+        } catch (e: Exception) {
+            try { conn.rollback() } catch (_: Exception) {}
+            throw e
+        } finally {
+            try { conn.close() } catch (_: Throwable) {}
+        }
+    }
+
+
     suspend fun insertNotification(
         userId: Int,
         actorId: Int?,

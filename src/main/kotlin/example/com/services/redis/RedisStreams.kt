@@ -5,11 +5,11 @@ import example.com.routes.dtos.LiveEvent
 // RedisStreams.kt
 object RedisStreams {
     // DURABLE STREAMS (Redis Streams) - Persistent, ordered events
-    const val CHAT_STREAM = "chat_events"              // Chat messages for moderation & history
-    const val MODERATION_STREAM = "moderation_events"  // Moderation actions & audit trail
-    const val ANALYTICS_STREAM = "analytics_events"    // Engagement metrics & analytics
-    const val BILLING_STREAM = "billing_events"        // Financial transactions (gifts)
-    const val SOCIAL_STREAM = "social_events"          // Follows, notifications, social actions
+    const val CHAT_EVENTS = "chat_events"              // Chat messages for moderation & history
+    const val MODERATION_EVENTS = "moderation_events"  // Moderation actions & audit trail
+    const val ANALYTICS_EVENTS = "analytics_events"    // Engagement metrics & analytics
+    const val BILLING_EVENTS = "billing_events"        // Financial transactions (gifts)
+    const val SOCIAL_EVENTS = "social_events"          // Follows, notifications, social actions
 
     // REAL-TIME CHANNELS (Pub/Sub) - Ephemeral, high-performance delivery
     const val ROOM_EVENTS_PREFIX = "room_events:"      // Real-time room events

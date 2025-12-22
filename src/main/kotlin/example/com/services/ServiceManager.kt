@@ -1,22 +1,21 @@
 package example.com.services
 
+import example.com.schemas.GiftsSchema
 import example.com.schemas.NotificationSchema
 import example.com.schemas.UserSchema
-import example.com.services.workers.NotificationWorker
-import example.com.services.redis.RedisService
+import example.com.services.gifts.OutboxDispatcher
 import example.com.services.redis.ShardedRedisService
-import example.com.services.token.ITokenService
 import example.com.services.workers.AnalyticsWorker
 import example.com.services.workers.BillingWorker
 import example.com.services.workers.ChatWorker
 import example.com.services.workers.ModerationWorker
+import example.com.services.workers.NotificationWorker
 import example.com.services.ws_session.CrossInstanceBroadcaster
 import example.com.services.ws_session.DistributedPermissionManager
 import example.com.services.ws_session.DistributedSessionManager
 import kotlinx.coroutines.*
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.SupervisorJob
 import java.util.UUID
+import javax.sql.DataSource
 
 /**
  * Centralized service container that manages all distributed services and their lifecycle.
@@ -27,7 +26,8 @@ class ServiceManager(
     private val shardedRedisService: ShardedRedisService,
     private val userSchema: UserSchema,
     private val notificationSchema: NotificationSchema,
-    private val authTokenService: ITokenService,
+    private val dataSource: DataSource,
+    private val giftsSchema: GiftsSchema,
     val instanceId: String = System.getenv("HOSTNAME") ?: "instance-${UUID.randomUUID().toString().take(8)}"
 ) : CoroutineScope {
     override val coroutineContext = SupervisorJob() + Dispatchers.Default
@@ -41,8 +41,13 @@ class ServiceManager(
     private val chatWorker = ChatWorker(shardedRedisService.chatRedis)
     private val moderationWorker = ModerationWorker(shardedRedisService.moderationRedis)
     private val analyticsWorker = AnalyticsWorker(shardedRedisService.analyticsRedis)
-    private val billingWorker = BillingWorker(shardedRedisService.billingRedis)
-    private val notificationWorker = NotificationWorker(shardedRedisService.socialRedis, notificationSchema, userSchema) // ✅ Fixed
+
+    private val outboxDispatcher = OutboxDispatcher(dataSource, shardedRedisService)
+    private var outboxDispatcherJob: Job? = null
+    private val billingWorker = BillingWorker(shardedRedisService.billingRedis, shardedRedisService, dataSource)
+
+
+    private val notificationWorker = NotificationWorker(shardedRedisService.socialRedis, notificationSchema, userSchema)
 
     // Background jobs
     private var notificationWorkerJob: Job? = null
@@ -69,6 +74,12 @@ class ServiceManager(
             } catch (e: Exception) {
                 println("❌ Failed to initialize Redis stream consumer groups: ${e.message}")
             }
+        }
+
+        // Start Outbox dispatcher
+        outboxDispatcherJob = launch {
+            println("▶️ Starting OutboxDispatcher...")
+            outboxDispatcher.start()
         }
 
         // Start cross-instance Pub/Sub listener

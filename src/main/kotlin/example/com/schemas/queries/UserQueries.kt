@@ -2,10 +2,10 @@ package example.com.schemas.queries
 
 object UserQueries {
     const val INSERT_USER = """
-            INSERT INTO users 
-            (email, password, salt, username, role, bio, occupation, created_at, birth_date, timezone, is_live) 
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """
+        INSERT INTO users 
+        (email, password, salt, username, role, bio, occupation, created_at, birth_date, timezone, is_live) 
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """
     const val SELECT_USER_BY_EMAIL = "SELECT * FROM users WHERE email = ?"
     const val SELECT_USER_BY_USERNAME = "SELECT * FROM users WHERE username = ?"
     const val SELECT_USER_BY_ID = "SELECT * FROM users WHERE id = ?"

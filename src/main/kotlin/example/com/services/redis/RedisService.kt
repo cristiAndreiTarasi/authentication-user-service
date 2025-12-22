@@ -7,7 +7,6 @@ import example.com.routes.dtos.LiveEvent
 import example.com.routes.dtos.withDefaults
 import io.lettuce.core.RedisClient
 import io.lettuce.core.RedisCommandExecutionException
-import io.lettuce.core.RedisFuture
 import io.lettuce.core.XGroupCreateArgs
 import io.lettuce.core.XReadArgs
 import io.lettuce.core.api.StatefulRedisConnection
@@ -20,9 +19,6 @@ import kotlinx.serialization.PolymorphicSerializer
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import java.time.Instant
-import kotlin.coroutines.resume
-import kotlin.coroutines.resumeWithException
-import kotlin.coroutines.suspendCoroutine
 
 /**
  * Data class representing social events in the Redis stream.
@@ -106,7 +102,7 @@ class RedisService(
             throw IllegalStateException("Chat stream operations not allowed on $redisRole Redis")
         }
         try {
-            producerCommands.xadd(RedisStreams.CHAT_STREAM, mapOf("event" to eventJson)).awaitFuture()
+            producerCommands.xadd(RedisStreams.CHAT_EVENTS, mapOf("event" to eventJson)).awaitFuture()
             println("DEBUG: [$redisRole] Added to chat stream: ${event::class.simpleName}")
         } catch (e: Exception) {
             println("ERROR: [$redisRole] Failed to add to chat stream: ${e.message}")
@@ -119,7 +115,7 @@ class RedisService(
             throw IllegalStateException("Moderation stream operations not allowed on $redisRole Redis")
         }
         try {
-            producerCommands.xadd(RedisStreams.MODERATION_STREAM, mapOf("event" to eventJson)).awaitFuture()
+            producerCommands.xadd(RedisStreams.MODERATION_EVENTS, mapOf("event" to eventJson)).awaitFuture()
             println("DEBUG: [$redisRole] Added to moderation stream: ${event::class.simpleName}")
         } catch (e: Exception) {
             println("ERROR: [$redisRole] Failed to add to moderation stream: ${e.message}")
@@ -132,7 +128,7 @@ class RedisService(
             throw IllegalStateException("Analytics stream operations not allowed on $redisRole Redis")
         }
         try {
-            producerCommands.xadd(RedisStreams.ANALYTICS_STREAM, mapOf("event" to eventJson)).awaitFuture()
+            producerCommands.xadd(RedisStreams.ANALYTICS_EVENTS, mapOf("event" to eventJson)).awaitFuture()
             println("DEBUG: [$redisRole] Added to analytics stream: ${event::class.simpleName}")
         } catch (e: Exception) {
             println("ERROR: [$redisRole] Failed to add to analytics stream: ${e.message}")
@@ -145,7 +141,7 @@ class RedisService(
             throw IllegalStateException("Billing stream operations not allowed on $redisRole Redis")
         }
         try {
-            producerCommands.xadd(RedisStreams.BILLING_STREAM, mapOf("event" to eventJson)).awaitFuture()
+            producerCommands.xadd(RedisStreams.BILLING_EVENTS, mapOf("event" to eventJson)).awaitFuture()
             println("DEBUG: [$redisRole] Added to billing stream: ${event::class.simpleName}")
         } catch (e: Exception) {
             println("ERROR: [$redisRole] Failed to add to billing stream: ${e.message}")
@@ -158,7 +154,7 @@ class RedisService(
             throw IllegalStateException("Social stream operations not allowed on $redisRole Redis")
         }
         try {
-            producerCommands.xadd(RedisStreams.SOCIAL_STREAM, mapOf("event" to eventJson)).awaitFuture()
+            producerCommands.xadd(RedisStreams.SOCIAL_EVENTS, mapOf("event" to eventJson)).awaitFuture()
             println("DEBUG: [$redisRole] Added to social stream: ${event::class.simpleName}")
         } catch (e: Exception) {
             println("ERROR: [$redisRole] Failed to add to social stream: ${e.message}")
@@ -208,7 +204,7 @@ class RedisService(
         )
         event.actorUsername?.let { map["actorUsername"] = it }
 
-        producerCommands.xadd(RedisStreams.SOCIAL_STREAM, map).awaitFuture()
+        producerCommands.xadd(RedisStreams.SOCIAL_EVENTS, map).awaitFuture()
         println("DEBUG: Added social event to stream: $type")
     }
 
@@ -217,11 +213,11 @@ class RedisService(
      */
     suspend fun initializeStreamConsumerGroups() {
         val streams = when (redisRole) {
-            RedisRole.CHAT -> listOf(RedisStreams.CHAT_STREAM)
-            RedisRole.MODERATION -> listOf(RedisStreams.MODERATION_STREAM)
-            RedisRole.ANALYTICS -> listOf(RedisStreams.ANALYTICS_STREAM)
-            RedisRole.BILLING -> listOf(RedisStreams.BILLING_STREAM)
-            RedisRole.SOCIAL -> listOf(RedisStreams.SOCIAL_STREAM)
+            RedisRole.CHAT -> listOf(RedisStreams.CHAT_EVENTS)
+            RedisRole.MODERATION -> listOf(RedisStreams.MODERATION_EVENTS)
+            RedisRole.ANALYTICS -> listOf(RedisStreams.ANALYTICS_EVENTS)
+            RedisRole.BILLING -> listOf(RedisStreams.BILLING_EVENTS)
+            RedisRole.SOCIAL -> listOf(RedisStreams.SOCIAL_EVENTS)
             RedisRole.SESSIONS -> listOf(RedisStreams.CROSS_INSTANCE_CONTROL)
         }
 
@@ -278,7 +274,7 @@ class RedisService(
         )
         event.actorUsername?.let { map["actorUsername"] = it }
 
-        producerCommands.xadd(RedisStreams.SOCIAL_STREAM, map).awaitFuture()
+        producerCommands.xadd(RedisStreams.SOCIAL_EVENTS, map).awaitFuture()
         println("DEBUG: Triggered live notification for user $userId ($username)")
     }
 

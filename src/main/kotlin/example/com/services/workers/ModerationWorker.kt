@@ -23,10 +23,10 @@ class ModerationWorker(
     private val consumerId = "moderation-consumer-${System.getenv("HOSTNAME") ?: "local"}"
 
     suspend fun start() {
-        println("🛡️ ModerationWorker starting for stream: ${RedisStreams.MODERATION_STREAM}")
+        println("🛡️ ModerationWorker starting for stream: ${RedisStreams.MODERATION_EVENTS}")
 
         try {
-            redisService.createConsumerGroupIfNotExists(RedisStreams.MODERATION_STREAM, consumerGroup)
+            redisService.createConsumerGroupIfNotExists(RedisStreams.MODERATION_EVENTS, consumerGroup)
         } catch (e: Exception) {
             println("WARN: Error creating moderation consumer group: ${e.message}")
         }
@@ -36,7 +36,7 @@ class ModerationWorker(
                 val messages = redisService.consumerCommands.xreadgroup(
                     Consumer.from(consumerGroup, consumerId),
                     XReadArgs.Builder.block(5000).count(50),
-                    XReadArgs.StreamOffset.from(RedisStreams.MODERATION_STREAM, ">")
+                    XReadArgs.StreamOffset.from(RedisStreams.MODERATION_EVENTS, ">")
                 ).awaitFuture()
 
                 if (messages.isNullOrEmpty()) {
@@ -51,7 +51,7 @@ class ModerationWorker(
                         processModerationMessage(msg)
                     } catch (e: Exception) {
                         println("ERROR: Failed to process moderation message ${msg.id}: ${e.message}")
-                        redisService.consumerCommands.xack(RedisStreams.MODERATION_STREAM, consumerGroup, msg.id).awaitFuture()
+                        redisService.consumerCommands.xack(RedisStreams.MODERATION_EVENTS, consumerGroup, msg.id).awaitFuture()
                     }
                 }
             } catch (e: Exception) {
@@ -74,7 +74,7 @@ class ModerationWorker(
         // - Alerting for suspicious patterns
 
         // Ack the message after processing
-        redisService.consumerCommands.xack(RedisStreams.MODERATION_STREAM, consumerGroup, msg.id).awaitFuture()
+        redisService.consumerCommands.xack(RedisStreams.MODERATION_EVENTS, consumerGroup, msg.id).awaitFuture()
     }
 
     suspend fun isHealthy(): Boolean = true

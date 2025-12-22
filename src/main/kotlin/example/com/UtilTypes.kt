@@ -50,6 +50,7 @@ enum class SocialEventType {
     UNFOLLOW,
     BLOCK,
     LIVE_STARTED,
+    GIFT_SENT
 }
 
 enum class StreamStatus(val dbValue: String) {

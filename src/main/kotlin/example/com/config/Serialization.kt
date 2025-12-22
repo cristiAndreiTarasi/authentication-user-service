@@ -2,6 +2,7 @@ package example.com.config
 
 import example.com.routes.dtos.LiveEvent
 import example.com.routes.dtos.NotificationEvent
+import example.com.routes.dtos.OutboxEvent
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.modules.*
 
@@ -47,9 +48,15 @@ val NotificationEventJson = SerializersModule {
     }
 }
 
+val OutboxEventJson = SerializersModule {
+    polymorphic(OutboxEvent::class) {
+        subclass(OutboxEvent.GiftOutbox::class)
+    }
+}
+
 private fun createAppJson(): Json {
     // Combine modules so a single Json knows how to handle both polymorphic hierarchies
-    val combinedModule = LiveEventJson + NotificationEventJson
+    val combinedModule = LiveEventJson + NotificationEventJson + OutboxEventJson
 
     return Json {
         ignoreUnknownKeys = true // Ignore unknown fields for forward compatibility
