@@ -137,5 +137,5 @@ suspend fun computeCoinsForGift(giftId: String, quantity: Int, giftsSchema: Gift
     val gift = giftsSchema.getGiftById(giftId)
         ?: throw IllegalArgumentException("Unknown giftId: $giftId")
     // assume priceCoins: Long on GiftCatalogEntryDto
-    return gift.priceCoins * quantity.toLong()
+    return gift.coinCost * quantity.toLong()
 }

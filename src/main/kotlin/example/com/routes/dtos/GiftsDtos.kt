@@ -7,7 +7,7 @@ import kotlinx.serialization.Serializable
 data class GiftCatalogEntryDto(
     val id: String,
     val name: String,
-    @SerialName("coinCost") val priceCoins: Long,
+    val coinCost: Long,
     val imageUrl: String? = null,
     val rarity: String? = null,
     val isActive: Boolean? = true

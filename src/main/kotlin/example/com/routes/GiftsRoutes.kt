@@ -33,8 +33,17 @@ fun Route.giftsRoutes(
 ) {
     route("/gifts") {
         get {
-            val catalog = giftsSchema.getCatalog()
-            call.respond(HttpStatusCode.OK, catalog)
+            try {
+                println("Fetching gifts catalog...")
+                val catalog = giftsSchema.getCatalog()
+                println("Successfully fetched ${catalog.size} gifts")
+                call.respond(HttpStatusCode.OK, catalog)
+            } catch (e: Exception) {
+                call.application.environment.log.error("Failed to fetch gifts catalog", e)
+                println("ERROR in getCatalog: ${e.message}")
+                e.printStackTrace()
+                call.respond(HttpStatusCode.InternalServerError, "Failed to fetch gifts: ${e.message}")
+            }
         }
 
         authenticate("auth-jwt") {

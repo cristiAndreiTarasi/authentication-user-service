@@ -22,7 +22,7 @@ object GiftsQueries {
     const val INSERT_OUTBOX = "INSERT INTO outbox (stream_name, event_type, payload) VALUES (?, ?, ?::jsonb)"
 
     const val SELECT_GIFTS_CATALOG = """
-        SELECT id, name, coin_cost AS price_coins, image_url, rarity
+        SELECT id, name, coin_cost AS price_coins, image_url, rarity, is_active
         FROM gifts_catalog
         WHERE is_active = TRUE
         ORDER BY coin_cost ASC

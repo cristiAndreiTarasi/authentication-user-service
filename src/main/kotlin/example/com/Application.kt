@@ -120,7 +120,9 @@ fun Application.module() {
     val streamSchema = StreamSchema(dataSource, categorySchema, tagSchema, gridFSService)
     val eventSchema = EventSchema(dataSource, categorySchema, tagSchema)
     val paymentSchema = PaymentSchema(dataSource)
-    val giftsSchema = GiftsSchema(dataSource)
+
+    val assetsBaseUrl = System.getenv("ASSETS_BASE_URL")?.trimEnd('/') ?: "http://nginx-static:8085"
+    val giftsSchema = GiftsSchema(dataSource, assetsBaseUrl)
     val giftsService = GiftsService(dataSource, giftsSchema, platformCutPercent = 0.20)
 
     val notificationSchema = NotificationSchema(dataSource)

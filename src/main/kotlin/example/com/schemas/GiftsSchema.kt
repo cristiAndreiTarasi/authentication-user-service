@@ -10,6 +10,7 @@ import kotlinx.coroutines.withContext
 
 class GiftsSchema(
     private val dataSource: DataSource,
+    private val assetsBaseUrl: String
 ) {
     suspend fun getGiftById(giftId: String): GiftCatalogEntryDto? = withContext(Dispatchers.IO) {
         val conn = dataSource.connection
@@ -24,7 +25,7 @@ class GiftsSchema(
                 GiftCatalogEntryDto(
                     id = rs.getString("id"),
                     name = rs.getString("name"),
-                    priceCoins = rs.getLong("price_coins"),
+                    coinCost = rs.getLong("price_coins"),
                     imageUrl = rs.getString("image_url"),
                     rarity = rs.getString("rarity")
                 )
@@ -134,13 +135,16 @@ class GiftsSchema(
             val rs = stmt.executeQuery()
             val out = mutableListOf<GiftCatalogEntryDto>()
             while (rs.next()) {
+                val rawImage = rs.getString("image_url") // might be '/images/gifts/confetti.png' or null
+                val finalImageUrl = canonicalizeImageUrl(rawImage)
                 out.add(
                     GiftCatalogEntryDto(
                         id = rs.getString("id"),
                         name = rs.getString("name"),
-                        priceCoins = rs.getLong("price_coins"),
-                        imageUrl = rs.getString("image_url"),
-                        rarity = rs.getString("rarity")
+                        coinCost = rs.getLong("price_coins"),
+                        imageUrl = finalImageUrl,
+                        rarity = rs.getString("rarity"),
+                        isActive = rs.getBoolean("is_active")
                     )
                 )
             }
@@ -150,6 +154,13 @@ class GiftsSchema(
         } finally {
             try { conn.close() } catch (_: Exception) {}
         }
+    }
+
+    private fun canonicalizeImageUrl(raw: String?): String? {
+        if (raw.isNullOrBlank()) return null
+        val trimmed = raw.trim()
+        // Just return the path, let client prepend base URL
+        return if (trimmed.startsWith("/")) trimmed else "/$trimmed"
     }
 
     // helper to update gift tx status (non-transactional)
