@@ -1,5 +1,6 @@
 package example.com.routes
 
+import example.com.routes.dtos.LiveEvent
 import example.com.routes.dtos.SendGiftRequestDto
 import example.com.schemas.GiftsSchema
 import example.com.schemas.StreamSchema
@@ -9,6 +10,7 @@ import example.com.services.gifts.InsufficientFundsException
 import example.com.services.gifts.computeCoinsForGift
 import example.com.services.redis.ShardedRedisService
 import example.com.services.token.ITokenService
+import example.com.services.ws_session.CrossInstanceBroadcaster
 import example.com.services.ws_session.DistributedPermissionManager
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.application.call
@@ -29,7 +31,8 @@ fun Route.giftsRoutes(
     streamSchema: StreamSchema,
     shardedRedisService: ShardedRedisService,
     userSchema: UserSchema,
-    distributedPermissionManager: DistributedPermissionManager
+    distributedPermissionManager: DistributedPermissionManager,
+    crossInstanceBroadcaster: CrossInstanceBroadcaster
 ) {
     route("/gifts") {
         get {
@@ -126,15 +129,38 @@ fun Route.giftsRoutes(
                         toUsername = toUsername
                     )
 
-                    // After successful DB commit, you may want to:
-                    //  - publish LiveEvent.Gift via cross-instance broadcaster
-                    //  - increment Redis counters
-                    // That should be done here (best-effort) so clients see the gift real-time.
-                    // Example (pseudo):
-                    // val giftEvent = LiveEvent.Gift(roomId = streamIdentifier, initiatorId = currentUserId.toString(), giftId = body.giftId, quantity = body.quantity, value = ???)
-                    // serviceManager.crossInstanceBroadcaster.broadcastToRoom(streamIdentifier, giftEvent)
-
                     call.respond(HttpStatusCode.Created, result)
+
+                    val giftEvent = LiveEvent.Gift(
+                        giftTxId = result.giftTxId,
+                        idempotency_key = body.idempotencyKey,
+                        roomId = streamIdentifier,
+                        initiatorId = currentUserId.toString(),
+                        timestamp = System.currentTimeMillis(),
+                        giftId = body.giftId,
+                        quantity = body.quantity,
+                        value = coinsAmount.toDouble()
+                    )
+
+                    // Broadcast typed gift (will route to billing/social etc and local sessions)
+                    crossInstanceBroadcaster.broadcastToRoom(streamIdentifier, giftEvent)
+
+                    // Build friendly system message text for chat
+                    val giftName = try {
+                        giftsSchema.getGiftById(body.giftId)?.name ?: body.giftId
+                    } catch (e: Exception) { body.giftId }
+
+                    val usernameForMsg = fromUsername ?: "A viewer"
+                    val systemText = "$usernameForMsg sent $giftName"
+
+                    val systemMessage = LiveEvent.SystemMessage(
+                        roomId = streamIdentifier,
+                        text = systemText,
+                        timestamp = System.currentTimeMillis()
+                    )
+
+                    // Broadcast chat-visible system message
+                    crossInstanceBroadcaster.broadcastToRoom(streamIdentifier, systemMessage)
                 } catch (e: InsufficientFundsException) {
                     call.respond(HttpStatusCode.PaymentRequired, mapOf("error" to "insufficient_funds", "required" to e.required, "balance" to e.balance))
                 } catch (e: Exception) {

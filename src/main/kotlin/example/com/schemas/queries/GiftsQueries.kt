@@ -1,6 +1,5 @@
 package example.com.schemas.queries
 
-// GiftsQueries.kt
 object GiftsQueries {
     const val INSERT_GIFT_TX = """
         INSERT INTO gift_transactions

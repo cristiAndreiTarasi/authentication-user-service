@@ -49,7 +49,7 @@ data class CrossInstanceMessage(
 * Ensures events reach all users across all instances
 */
 class CrossInstanceBroadcaster(
-    private val shardedRedisService: ShardedRedisService,  // Changed to ShardedRedisService
+    private val shardedRedisService: ShardedRedisService,
     private val instanceId: String
 ) {
     private val json: Json = AppJson

@@ -112,7 +112,8 @@ fun Application.configureRouting(
                 streamSchema = streamSchema,
                 shardedRedisService = shardedRedisService,
                 userSchema = userSchema,
-                serviceManager.distributedPermissionManager
+                serviceManager.distributedPermissionManager,
+                serviceManager.crossInstanceBroadcaster
             )
         }
     }

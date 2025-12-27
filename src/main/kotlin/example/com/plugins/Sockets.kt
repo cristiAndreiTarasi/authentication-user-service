@@ -724,8 +724,6 @@ fun Application.configureSockets(
                 // Mark notification as read in database
                 val success = notificationSchema.markAsRead(userId, event.notificationId)
                 if (success) {
-                    println("DEBUG: User $userId marked notification ${event.notificationId} as read")
-
                     // Send updated unread count
                     val unreadCount = notificationSchema.getUnreadCount(userId)
                     val updateEvent = NotificationEvent.ProfileUpdate(

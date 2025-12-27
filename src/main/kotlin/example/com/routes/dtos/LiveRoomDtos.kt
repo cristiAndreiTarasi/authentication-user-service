@@ -189,7 +189,6 @@ sealed class LiveEvent {
     ) : LiveEvent()
 }
 
-// guarantees initiatorId + timestamp even if a call site forgets them
 fun LiveEvent.withDefaults(): LiveEvent {
     val now = System.currentTimeMillis()
     return when (this) {
