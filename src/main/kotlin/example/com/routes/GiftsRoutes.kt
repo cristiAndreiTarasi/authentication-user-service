@@ -8,6 +8,7 @@ import example.com.schemas.UserSchema
 import example.com.services.gifts.GiftsService
 import example.com.services.gifts.InsufficientFundsException
 import example.com.services.gifts.computeCoinsForGift
+import example.com.services.redis.RedisStreams
 import example.com.services.redis.ShardedRedisService
 import example.com.services.token.ITokenService
 import example.com.services.ws_session.CrossInstanceBroadcaster
@@ -112,7 +113,11 @@ fun Route.giftsRoutes(
                         return@post
                     }
 
-                    // Optionally fetch usernames to put in outbox payload
+                    // Fetch gift details for structured message
+                    val gift = giftsSchema.getGiftById(body.giftId)
+                    val giftName = gift?.name ?: body.giftId
+
+                    // Fetch usernames
                     val fromUsername = userSchema.findById(currentUserId)?.username
                     val toUsername = userSchema.findById(targetUserId)?.username
 
@@ -121,7 +126,7 @@ fun Route.giftsRoutes(
                         idempotencyKey = body.idempotencyKey,
                         fromUserId = currentUserId,
                         toUserId = targetUserId,
-                        streamId = streamIdentifier, // keep original identifier (streamKey or numeric string) for outbox
+                        streamId = streamIdentifier,
                         giftType = body.giftId,
                         quantity = body.quantity,
                         coinsAmount = coinsAmount,
@@ -131,6 +136,7 @@ fun Route.giftsRoutes(
 
                     call.respond(HttpStatusCode.Created, result)
 
+                    // Always create the Gift event for counters and possible animation
                     val giftEvent = LiveEvent.Gift(
                         giftTxId = result.giftTxId,
                         idempotency_key = body.idempotencyKey,
@@ -142,27 +148,67 @@ fun Route.giftsRoutes(
                         value = coinsAmount.toDouble()
                     )
 
-                    // Broadcast typed gift (will route to billing/social etc and local sessions)
-                    crossInstanceBroadcaster.broadcastToRoom(streamIdentifier, giftEvent)
-
-                    // Build friendly system message text for chat
-                    val giftName = try {
-                        giftsSchema.getGiftById(body.giftId)?.name ?: body.giftId
-                    } catch (e: Exception) { body.giftId }
-
                     val usernameForMsg = fromUsername ?: "A viewer"
-                    val systemText = "$usernameForMsg sent $giftName"
+                    val isExpensive = coinsAmount >= 1000
 
-                    val systemMessage = LiveEvent.SystemMessage(
-                        roomId = streamIdentifier,
-                        text = systemText,
-                        timestamp = System.currentTimeMillis()
-                    )
+                    // For expensive gifts (1000+ coins): send Gift event for animation area
+                    if (isExpensive) {
+                        // Broadcast typed gift event (for animation area)
+                        crossInstanceBroadcaster.broadcastToRoom(streamIdentifier, giftEvent)
 
-                    // Broadcast chat-visible system message
-                    crossInstanceBroadcaster.broadcastToRoom(streamIdentifier, systemMessage)
+                        // For expensive gifts, send regular system message (no special styling)
+                        val systemMessage = LiveEvent.SystemMessage(
+                            roomId = streamIdentifier,
+                            text = "$usernameForMsg sent $giftName",
+                            messageType = "generic", // NOT "gift" for expensive gifts
+                            metadata = mapOf(
+                                "isExpensive" to "true",
+                                "totalCoins" to coinsAmount.toString()
+                            ),
+                            timestamp = System.currentTimeMillis()
+                        )
+
+                        // Broadcast regular system message for chat
+                        crossInstanceBroadcaster.broadcastToRoom(streamIdentifier, systemMessage)
+                    } else {
+                        // For cheap gifts (<1000 coins): ONLY send GiftSystemMessage for special styling
+                        // DO NOT send a SystemMessage to avoid duplicates
+                        val giftSystemMessage = LiveEvent.GiftSystemMessage(
+                            roomId = streamIdentifier,
+                            text = "$usernameForMsg sent $giftName",
+                            giftId = body.giftId,
+                            giftName = giftName,
+                            giftImageUrl = gift?.imageUrl,
+                            quantity = body.quantity,
+                            totalCoins = coinsAmount,
+                            senderId = currentUserId.toString(),
+                            senderName = usernameForMsg,
+                            timestamp = System.currentTimeMillis()
+                        )
+
+                        // Broadcast structured gift message (for cheap gifts with special styling)
+                        crossInstanceBroadcaster.broadcastToRoom(streamIdentifier, giftSystemMessage)
+
+                        // DO NOT send SystemMessage for cheap gifts - that's what causes duplicates
+                        // The GiftSystemMessage will be handled by the client as a special chat message
+                    }
+
+                    // Update gift counter in Redis
+                    try {
+                        shardedRedisService.incrementCounter(
+                            "${RedisStreams.ROOM_COUNTERS_PREFIX}$streamIdentifier:gifts_total",
+                            coinsAmount
+                        )
+                    } catch (e: Exception) {
+                        println("WARN: Failed to update gift counter: ${e.message}")
+                    }
+
                 } catch (e: InsufficientFundsException) {
-                    call.respond(HttpStatusCode.PaymentRequired, mapOf("error" to "insufficient_funds", "required" to e.required, "balance" to e.balance))
+                    call.respond(HttpStatusCode.PaymentRequired, mapOf(
+                        "error" to "insufficient_funds",
+                        "required" to e.required,
+                        "balance" to e.balance
+                    ))
                 } catch (e: Exception) {
                     call.application.environment.log.error("Failed to send gift", e)
                     call.respond(HttpStatusCode.InternalServerError, "Failed to send gift")

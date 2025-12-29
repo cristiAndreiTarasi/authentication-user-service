@@ -130,6 +130,12 @@ fun Application.configureSockets(
                 val systemMessage = LiveEvent.SystemMessage(
                     roomId = event.roomId,
                     text = "$username was kicked from the stream",
+                    messageType = "moderation",
+                    metadata = mapOf(
+                        "action" to "kick",
+                        "targetUsername" to username,
+                        "targetUserId" to event.targetUserId
+                    ),
                     timestamp = System.currentTimeMillis()
                 )
                 crossInstanceBroadcaster.broadcastToRoom(event.roomId, systemMessage)
@@ -153,6 +159,12 @@ fun Application.configureSockets(
                 val systemMessage = LiveEvent.SystemMessage(
                     roomId = event.roomId,
                     text = "$username was muted",
+                    messageType = "moderation",
+                    metadata = mapOf(
+                        "action" to "mute",
+                        "targetUsername" to username,
+                        "targetUserId" to event.targetUserId
+                    ),
                     timestamp = System.currentTimeMillis()
                 )
                 crossInstanceBroadcaster.broadcastToRoom(event.roomId, systemMessage)
@@ -176,6 +188,12 @@ fun Application.configureSockets(
                 val systemMessage = LiveEvent.SystemMessage(
                     roomId = event.roomId,
                     text = "$username was unmuted",
+                    messageType = "moderation",
+                    metadata = mapOf(
+                        "action" to "unmute",
+                        "targetUsername" to username,
+                        "targetUserId" to event.targetUserId
+                    ),
                     timestamp = System.currentTimeMillis()
                 )
                 crossInstanceBroadcaster.broadcastToRoom(event.roomId, systemMessage)
@@ -202,6 +220,12 @@ fun Application.configureSockets(
                 val systemMessage = LiveEvent.SystemMessage(
                     roomId = event.roomId,
                     text = "$username was granted moderator privileges",
+                    messageType = "moderation",
+                    metadata = mapOf(
+                        "action" to "grant_moderator",
+                        "targetUsername" to username,
+                        "targetUserId" to event.targetUserId
+                    ),
                     timestamp = System.currentTimeMillis()
                 )
                 crossInstanceBroadcaster.broadcastToRoom(event.roomId, systemMessage)
@@ -225,6 +249,12 @@ fun Application.configureSockets(
                 val systemMessage = LiveEvent.SystemMessage(
                     roomId = event.roomId,
                     text = "$username was removed as moderator",
+                    messageType = "moderation",
+                    metadata = mapOf(
+                        "action" to "revoke_moderator",
+                        "targetUsername" to username,
+                        "targetUserId" to event.targetUserId
+                    ),
                     timestamp = System.currentTimeMillis()
                 )
                 crossInstanceBroadcaster.broadcastToRoom(event.roomId, systemMessage)
@@ -310,10 +340,14 @@ fun Application.configureSockets(
         val json = LiveEventJson.encodeToString(liveEventPolymorphic, streamStatsEvent.withDefaults())
         session.send(Frame.Text(json))
 
-        // send gifts summary as SystemMessage or a new event if you prefer
+        // send gifts summary as structured SystemMessage
         val giftsSummary = LiveEvent.SystemMessage(
             roomId = roomId,
             text = "Gifts total: $totalGiftsCoins coins",
+            messageType = "generic",
+            metadata = mapOf(
+                "totalGiftsCoins" to totalGiftsCoins.toString()
+            ),
             timestamp = System.currentTimeMillis()
         )
         session.send(Frame.Text(LiveEventJson.encodeToString(liveEventPolymorphic, giftsSummary.withDefaults())))
@@ -377,6 +411,15 @@ fun Application.configureSockets(
                     val systemEvent = LiveEvent.SystemMessage(
                         roomId = roomId,
                         text = message,
+                        messageType = "like",
+                        metadata = mapOf(
+                            "username" to username,
+                            "totalLikes" to userTotal.toString(),
+                            "milestone" to when (userTotal) {
+                                1L -> "first"
+                                else -> "hundred"
+                            }
+                        ),
                         timestamp = System.currentTimeMillis()
                     )
                     crossInstanceBroadcaster.broadcastToRoom(roomId, systemEvent)
@@ -390,8 +433,14 @@ fun Application.configureSockets(
                 val systemMessage = LiveEvent.SystemMessage(
                     roomId = roomId,
                     text = "${event.username} joined the stream",
+                    messageType = "join",
+                    metadata = mapOf(
+                        "username" to event.username,
+                        "userId" to userId
+                    ),
                     timestamp = System.currentTimeMillis()
                 )
+
 
                 // Automatically routes to ANALYTICS_STREAM and CHAT_STREAM via broadcastToRoom
                 crossInstanceBroadcaster.broadcastToRoom(roomId, event)
@@ -403,6 +452,11 @@ fun Application.configureSockets(
                 val systemMessage = LiveEvent.SystemMessage(
                     roomId = roomId,
                     text = "${event.username} left the stream",
+                    messageType = "leave",
+                    metadata = mapOf(
+                        "username" to event.username,
+                        "userId" to userId
+                    ),
                     timestamp = System.currentTimeMillis()
                 )
 
@@ -444,6 +498,7 @@ fun Application.configureSockets(
                     val err = LiveEvent.SystemMessage(
                         roomId = roomId,
                         text = "Gifts must be sent via the official gift API",
+                        messageType = "generic",
                         timestamp = System.currentTimeMillis()
                     )
                     crossInstanceBroadcaster.broadcastToRoom(roomId, err)
@@ -455,7 +510,14 @@ fun Application.configureSockets(
                 redisManager.incrementCounter("room:$roomId:gifts:${event.giftId}", event.quantity.toLong())
 
                 // Optionally update other ephemeral stats:
-                val totalGifts = redisManager.getCounter("${RedisStreams.ROOM_COUNTERS_PREFIX}$roomId:gifts_total") ?: 0
+                val totalGifts = redisManager.incrementCounter(
+                    "${RedisStreams.ROOM_COUNTERS_PREFIX}$roomId:gifts_total",
+                    (event.value * event.quantity).toLong()
+                )
+
+                // For expensive gifts, the SystemMessage will be sent from giftsRoutes
+                // For cheap gifts, only GiftSystemMessage is sent from giftsRoutes
+                // So we don't need to create any additional chat messages here
             }
 
             // MODERATION EVENTS (Real-time + Moderation Stream)
@@ -706,6 +768,21 @@ fun Application.configureSockets(
             is LiveEvent.ModerationAck -> {
                 println("WARNING: Received ModerationAck from client - this should only be sent by server")
                 // Do nothing - this is a server-generated event
+            }
+
+            is LiveEvent.GiftSystemMessage -> {
+                // Add to room history for chat replay
+                redisManager.addToHistory(roomId, event)
+
+                // Automatically routes to CHAT_STREAM via broadcastToRoom
+                crossInstanceBroadcaster.broadcastToRoom(roomId, event)
+
+                // Also add to billing stream since it's a gift
+                try {
+                    redisManager.addToCategorizedStream(event)
+                } catch (e: Exception) {
+                    println("WARN: Failed to add gift system message to categorized stream: ${e.message}")
+                }
             }
         }
     }

@@ -31,6 +31,7 @@ val LiveEventJson = SerializersModule {
         subclass(LiveEvent.StreamTerminatedEvent::class)
         subclass(LiveEvent.ModerationClearEvent::class)
         subclass(LiveEvent.ModerationAck::class)
+        subclass(LiveEvent.GiftSystemMessage::class)
     }
 }
 

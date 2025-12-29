@@ -42,6 +42,7 @@ enum class EventCategory {
 fun LiveEvent.getEventCategory(): EventCategory = when (this) {
     is LiveEvent.ChatMessage -> EventCategory.CHAT
     is LiveEvent.SystemMessage -> EventCategory.CHAT // System messages go with chat
+    is LiveEvent.GiftSystemMessage -> EventCategory.CHAT
     is LiveEvent.KickUser -> EventCategory.MODERATION
     is LiveEvent.MuteUser -> EventCategory.MODERATION
     is LiveEvent.UnmuteUser -> EventCategory.MODERATION

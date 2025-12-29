@@ -42,8 +42,26 @@ sealed class LiveEvent {
     data class SystemMessage(
         override val roomId: String,
         override val initiatorId: String = "system",
-        override val timestamp: Long? = null,
-        val text: String
+        override val timestamp: Long = System.currentTimeMillis(),
+        val text: String,
+        val messageType: String = "generic", // "generic", "gift", "moderation", "join", "leave", "like"
+        val metadata: Map<String, String> = emptyMap()
+    ) : LiveEvent()
+
+    @Serializable
+    @SerialName("GiftSystemMessage")
+    data class GiftSystemMessage(
+        override val roomId: String,
+        override val initiatorId: String = "system",
+        override val timestamp: Long = System.currentTimeMillis(),
+        val text: String,
+        val giftId: String,
+        val giftName: String,
+        val giftImageUrl: String? = null,
+        val quantity: Int,
+        val totalCoins: Long, // Total cost in coins (price * quantity)
+        val senderId: String,
+        val senderName: String
     ) : LiveEvent()
 
     @Serializable
@@ -185,7 +203,9 @@ sealed class LiveEvent {
         override val timestamp: Long? = null,
         val actionType: String, // "kick", "mute", "unmute", "grant_moderator", "revoke_moderator"
         val targetUserId: String,
-        val success: Boolean
+        val success: Boolean,
+        val messageType: String = "generic", // "generic", "gift", "moderation", "join", "leave", "like"
+        val metadata: Map<String, String> = emptyMap()
     ) : LiveEvent()
 }
 
@@ -205,9 +225,13 @@ fun LiveEvent.withDefaults(): LiveEvent {
                 timestamp = this.timestamp ?: now
             )
         is LiveEvent.SystemMessage -> this.copy(
-                initiatorId = this.initiatorId ?: "system",
-                timestamp = this.timestamp ?: now
-            )
+            initiatorId = this.initiatorId ?: "system",
+            timestamp = this.timestamp ?: now
+        )
+        is LiveEvent.GiftSystemMessage -> this.copy(
+            initiatorId = this.initiatorId ?: "system",
+            timestamp = this.timestamp ?: now
+        )
         is LiveEvent.Like -> this.copy(
                 initiatorId = this.initiatorId ?: "system",
                 timestamp = this.timestamp ?: now
